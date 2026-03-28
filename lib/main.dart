@@ -13,12 +13,14 @@ import 'src/matterport_embed.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await SystemChrome.setPreferredOrientations([
-    DeviceOrientation.portraitUp,
-  ]);
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+  } catch (_) {
+    // Firebase chưa được cấu hình – chạy ở chế độ demo (không cần database).
+  }
   runApp(const RoomifyApp());
 }
 
@@ -43,15 +45,10 @@ enum PaymentMethod { qr, card }
 
 typedef AuthFlow = Future<bool> Function(AuthMode mode);
 typedef MembershipFlow = Future<bool> Function(
-  MembershipTier tier,
-  PaymentMethod method,
-);
+    MembershipTier tier, PaymentMethod method);
 
 class MembershipCheckoutResult {
-  const MembershipCheckoutResult({
-    required this.tier,
-    required this.method,
-  });
+  const MembershipCheckoutResult({required this.tier, required this.method});
 
   final MembershipTier tier;
   final PaymentMethod method;
@@ -145,15 +142,17 @@ class _RoomifyAppState extends State<RoomifyApp> {
   @override
   void initState() {
     super.initState();
-    // Lắng nghe trạng thái đăng nhập từ Firebase.
+    // Lắng nghe trạng thái đăng nhập từ Firebase (bỏ qua khi chạy demo).
+    if (Firebase.apps.isEmpty) return;
     AuthService.instance.authStateChanges.listen((user) async {
       if (!mounted) return;
       if (user != null) {
         // Tạo profile nếu chưa có (đăng nhập lần đầu).
         await FirestoreService.instance.upsertUserProfile(user);
         // Đọc membership từ Firestore.
-        final profile =
-            await FirestoreService.instance.getUserProfile(user.uid);
+        final profile = await FirestoreService.instance.getUserProfile(
+          user.uid,
+        );
         final tierStr = profile?['membershipTier'] as String?;
         final tier = tierStr == null
             ? null
@@ -227,7 +226,7 @@ class _RoomifyAppState extends State<RoomifyApp> {
 
     final plan = membershipPlanInfo(tier);
     final uid = AuthService.instance.currentUser?.uid;
-    if (uid != null) {
+    if (uid != null && Firebase.apps.isNotEmpty) {
       await FirestoreService.instance.updateMembershipTier(uid, tier.name);
     }
     setState(() {
@@ -283,16 +282,8 @@ class _RoomifyAppState extends State<RoomifyApp> {
             fontSize: 16,
             fontWeight: FontWeight.w700,
           ),
-          bodyLarge: TextStyle(
-            color: roomifyText,
-            fontSize: 15,
-            height: 1.55,
-          ),
-          bodyMedium: TextStyle(
-            color: roomifyMuted,
-            fontSize: 14,
-            height: 1.5,
-          ),
+          bodyLarge: TextStyle(color: roomifyText, fontSize: 15, height: 1.55),
+          bodyMedium: TextStyle(color: roomifyMuted, fontSize: 14, height: 1.5),
         ),
       ),
       home: _showSplash
@@ -458,11 +449,9 @@ class _RoomifyShellState extends State<RoomifyShell> {
   }
 
   void _openVr(PropertyItem property) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => VrTourPage(property: property),
-      ),
-    );
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => VrTourPage(property: property)));
   }
 
   @override
@@ -533,20 +522,26 @@ class _RoomifyShellState extends State<RoomifyShell> {
           ),
           NavigationDestination(
             icon: Icon(CupertinoIcons.square_grid_2x2, color: Colors.white70),
-            selectedIcon:
-                Icon(CupertinoIcons.square_grid_2x2_fill, color: Colors.white),
+            selectedIcon: Icon(
+              CupertinoIcons.square_grid_2x2_fill,
+              color: Colors.white,
+            ),
             label: 'Khám phá',
           ),
           NavigationDestination(
             icon: Icon(CupertinoIcons.chat_bubble_2, color: Colors.white70),
-            selectedIcon:
-                Icon(CupertinoIcons.chat_bubble_2_fill, color: Colors.white),
+            selectedIcon: Icon(
+              CupertinoIcons.chat_bubble_2_fill,
+              color: Colors.white,
+            ),
             label: 'Liên hệ',
           ),
           NavigationDestination(
             icon: Icon(CupertinoIcons.add_circled, color: Colors.white70),
-            selectedIcon:
-                Icon(CupertinoIcons.add_circled_solid, color: Colors.white),
+            selectedIcon: Icon(
+              CupertinoIcons.add_circled_solid,
+              color: Colors.white,
+            ),
             label: 'Đăng tin',
           ),
         ],
@@ -623,17 +618,17 @@ class SplashScreen extends StatelessWidget {
                 Text(
                   'Xem nhà bằng VR, chốt nhu cầu nhanh hơn.',
                   textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                        color: Colors.white,
-                      ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.headlineMedium?.copyWith(color: Colors.white),
                 ),
                 const SizedBox(height: 16),
                 Text(
                   'Khám phá nhà ở cao cấp từ xa, xem mức giá ngay lập tức và chuyển thẳng sang đặt lịch hoặc liên hệ tư vấn viên.',
                   textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                        color: Colors.white70,
-                      ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyLarge?.copyWith(color: Colors.white70),
                 ),
                 const SizedBox(height: 28),
                 Row(
@@ -776,9 +771,11 @@ class _HomeScreenState extends State<HomeScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            LabelText(widget.isAuthenticated
-                                ? 'Xin chào trở lại'
-                                : 'Khám phá tự do'),
+                            LabelText(
+                              widget.isAuthenticated
+                                  ? 'Xin chào trở lại'
+                                  : 'Khám phá tự do',
+                            ),
                             const SizedBox(height: 4),
                             Text(
                               widget.isAuthenticated
@@ -864,7 +861,9 @@ class _HomeScreenState extends State<HomeScreen> {
                       itemBuilder: (context, index) {
                         final entry = categories.entries.elementAt(index);
                         return CategoryCard(
-                            label: entry.key, count: entry.value);
+                          label: entry.key,
+                          count: entry.value,
+                        );
                       },
                     ),
                   ),
@@ -890,8 +889,9 @@ class _HomeScreenState extends State<HomeScreen> {
                           PropertyCard(
                             property: property,
                             compact: true,
-                            isSaved:
-                                widget.savedPropertyIds.contains(property.id),
+                            isSaved: widget.savedPropertyIds.contains(
+                              property.id,
+                            ),
                             onToggleSaved: () => widget.onToggleSaved(property),
                             onTap: () => widget.onOpenProperty(property),
                           ),
@@ -938,17 +938,17 @@ class _ListingsScreenState extends State<ListingsScreen> {
   Widget build(BuildContext context) {
     final districts = [
       'Tất cả',
-      ...{for (final property in widget.properties) property.district}
+      ...{for (final property in widget.properties) property.district},
     ];
     final types = [
       'Tất cả',
-      ...{for (final property in widget.properties) property.type}
+      ...{for (final property in widget.properties) property.type},
     ];
     const prices = [
       'Tất cả',
       'Dưới 700 nghìn USD',
       '700 nghìn - 1,2 triệu USD',
-      'Trên 1,2 triệu USD'
+      'Trên 1,2 triệu USD',
     ];
 
     final visible = widget.properties.where((property) {
@@ -981,7 +981,9 @@ class _ListingsScreenState extends State<ListingsScreen> {
       child: CustomScrollView(
         slivers: [
           const NativeSliverHeader(
-              title: 'Danh sách bất động sản', subtitle: 'Khám phá'),
+            title: 'Danh sách bất động sản',
+            subtitle: 'Khám phá',
+          ),
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
@@ -1137,11 +1139,9 @@ class _ConnectScreenState extends State<ConnectScreen> {
         name: _nameController.text,
         phone: _phoneController.text,
         type: _mode == ConnectMode.book ? 'book' : 'contact',
-        schedule: _scheduleController.text.isEmpty
-            ? null
-            : _scheduleController.text,
-        notes:
-            _notesController.text.isEmpty ? null : _notesController.text,
+        schedule:
+            _scheduleController.text.isEmpty ? null : _scheduleController.text,
+        notes: _notesController.text.isEmpty ? null : _notesController.text,
       );
     }
 
@@ -1176,7 +1176,9 @@ class _ConnectScreenState extends State<ConnectScreen> {
       child: CustomScrollView(
         slivers: [
           const NativeSliverHeader(
-              title: 'Đặt lịch và liên hệ', subtitle: 'Thao tác'),
+            title: 'Đặt lịch và liên hệ',
+            subtitle: 'Thao tác',
+          ),
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(20, 12, 20, 120),
@@ -1206,11 +1208,13 @@ class _ConnectScreenState extends State<ConnectScreen> {
                     showSelectedIcon: false,
                     segments: const [
                       ButtonSegment(
-                          value: ConnectMode.book,
-                          label: Text('Đặt lịch xem nhà')),
+                        value: ConnectMode.book,
+                        label: Text('Đặt lịch xem nhà'),
+                      ),
                       ButtonSegment(
-                          value: ConnectMode.contact,
-                          label: Text('Liên hệ tư vấn')),
+                        value: ConnectMode.contact,
+                        label: Text('Liên hệ tư vấn'),
+                      ),
                     ],
                     selected: {_mode},
                     onSelectionChanged: (selection) {
@@ -1265,9 +1269,11 @@ class _ConnectScreenState extends State<ConnectScreen> {
                           FilledButton(
                             onPressed: _submit,
                             style: appPrimaryButtonStyle,
-                            child: Text(_mode == ConnectMode.book
-                                ? 'Gửi yêu cầu xem nhà'
-                                : 'Gửi yêu cầu tư vấn'),
+                            child: Text(
+                              _mode == ConnectMode.book
+                                  ? 'Gửi yêu cầu xem nhà'
+                                  : 'Gửi yêu cầu tư vấn',
+                            ),
                           ),
                         ],
                       ),
@@ -1323,9 +1329,8 @@ class _PostPropertyScreenState extends State<PostPropertyScreen> {
   void _createPreview() {
     final postingPrice = widget.membershipTier == null ? '50.000đ' : '0đ';
 
-    final title = _titleController.text.isEmpty
-        ? 'Tin đăng nháp'
-        : _titleController.text;
+    final title =
+        _titleController.text.isEmpty ? 'Tin đăng nháp' : _titleController.text;
     final location = _locationController.text.isEmpty
         ? 'Quận/Huyện, Thành phố'
         : _locationController.text;
@@ -1372,8 +1377,7 @@ class _PostPropertyScreenState extends State<PostPropertyScreen> {
         price: price,
         location: location,
         type: _type,
-        imageUrl:
-            _imageController.text.isEmpty ? null : _imageController.text,
+        imageUrl: _imageController.text.isEmpty ? null : _imageController.text,
         vrUrl: _vrController.text.isEmpty ? null : _vrController.text,
       );
     }
@@ -1409,7 +1413,9 @@ class _PostPropertyScreenState extends State<PostPropertyScreen> {
       child: CustomScrollView(
         slivers: [
           const NativeSliverHeader(
-              title: 'Đăng bất động sản của bạn', subtitle: 'Chủ nhà'),
+            title: 'Đăng bất động sản của bạn',
+            subtitle: 'Chủ nhà',
+          ),
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(20, 12, 20, 120),
@@ -1461,7 +1467,7 @@ class _PostPropertyScreenState extends State<PostPropertyScreen> {
                             'Căn hộ',
                             'Căn hộ penthouse',
                             'Nhà phố',
-                            'Biệt thự'
+                            'Biệt thự',
                           ],
                           onChanged: (value) {
                             if (value == null) return;
@@ -1545,8 +1551,10 @@ class MembershipPricingCard extends StatelessWidget {
               const Expanded(child: LabelText('Chi phí đăng bài')),
               if (currentTier != null)
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
                     color: roomifyGold.withValues(alpha: 0.16),
                     borderRadius: BorderRadius.circular(999),
@@ -1564,11 +1572,7 @@ class MembershipPricingCard extends StatelessWidget {
           const SizedBox(height: 10),
           const Text(
             'Đăng lẻ 50.000đ cho mỗi bài. Nếu là thành viên đang hoạt động, bạn được miễn phí đăng bài trong suốt thời hạn gói.',
-            style: TextStyle(
-              color: roomifyText,
-              fontSize: 15,
-              height: 1.5,
-            ),
+            style: TextStyle(color: roomifyText, fontSize: 15, height: 1.5),
           ),
           const SizedBox(height: 16),
           SizedBox(
@@ -1748,7 +1752,9 @@ class PostingFeeSummary extends StatelessWidget {
             ),
           ),
           TextButton(
-              onPressed: onManageMembership, child: const Text('Xem gói')),
+            onPressed: onManageMembership,
+            child: const Text('Xem gói'),
+          ),
         ],
       ),
     );
@@ -1807,9 +1813,9 @@ class _MembershipManagementPageState extends State<MembershipManagementPage> {
       return;
     }
 
-    Navigator.of(context).pop(
-      MembershipCheckoutResult(tier: plan.tier, method: method),
-    );
+    Navigator.of(
+      context,
+    ).pop(MembershipCheckoutResult(tier: plan.tier, method: method));
   }
 
   @override
@@ -2000,10 +2006,7 @@ class _MembershipManagementPageState extends State<MembershipManagementPage> {
 }
 
 class MembershipPaymentSheet extends StatefulWidget {
-  const MembershipPaymentSheet({
-    super.key,
-    required this.plan,
-  });
+  const MembershipPaymentSheet({super.key, required this.plan});
 
   final MembershipPlanInfo plan;
 
@@ -2142,8 +2145,9 @@ class _MembershipPaymentSheetState extends State<MembershipPaymentSheet> {
                                 if (text.isEmpty) {
                                   return 'Nhập MM/YY';
                                 }
-                                if (!RegExp(r'^(0[1-9]|1[0-2])/[0-9]{2}$')
-                                    .hasMatch(text)) {
+                                if (!RegExp(
+                                  r'^(0[1-9]|1[0-2])/[0-9]{2}$',
+                                ).hasMatch(text)) {
                                   return 'Ngày hết hạn chưa hợp lệ';
                                 }
                                 return null;
@@ -2201,10 +2205,7 @@ class _MembershipPaymentSheetState extends State<MembershipPaymentSheet> {
 }
 
 class QrPaymentPreview extends StatelessWidget {
-  const QrPaymentPreview({
-    super.key,
-    required this.plan,
-  });
+  const QrPaymentPreview({super.key, required this.plan});
 
   final MembershipPlanInfo plan;
 
@@ -2231,8 +2232,9 @@ class QrPaymentPreview extends StatelessWidget {
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(24),
-                  border:
-                      Border.all(color: roomifyNavy.withValues(alpha: 0.08)),
+                  border: Border.all(
+                    color: roomifyNavy.withValues(alpha: 0.08),
+                  ),
                 ),
                 child: Padding(
                   padding: const EdgeInsets.all(16),
@@ -2376,7 +2378,8 @@ class PropertyDetailPage extends StatelessWidget {
                   minimumSize: const Size.fromHeight(54),
                   side: const BorderSide(color: Color(0x1F0A1931)),
                   shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(18)),
+                    borderRadius: BorderRadius.circular(18),
+                  ),
                 ),
                 child: const Text('Liên hệ tư vấn'),
               ),
@@ -2428,12 +2431,15 @@ class PropertyDetailPage extends StatelessWidget {
                           children: [
                             LabelText(property.type),
                             const SizedBox(height: 8),
-                            Text(property.title,
-                                style:
-                                    Theme.of(context).textTheme.headlineSmall),
+                            Text(
+                              property.title,
+                              style: Theme.of(context).textTheme.headlineSmall,
+                            ),
                             const SizedBox(height: 8),
-                            Text(property.location,
-                                style: Theme.of(context).textTheme.bodyMedium),
+                            Text(
+                              property.location,
+                              style: Theme.of(context).textTheme.bodyMedium,
+                            ),
                           ],
                         ),
                       ),
@@ -2442,24 +2448,33 @@ class PropertyDetailPage extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 18),
-                  Text(property.description,
-                      style: Theme.of(context).textTheme.bodyLarge),
+                  Text(
+                    property.description,
+                    style: Theme.of(context).textTheme.bodyLarge,
+                  ),
                   const SizedBox(height: 18),
                   Row(
                     children: [
                       Expanded(
-                          child: MetricTile(
-                              label: 'Phòng ngủ',
-                              value: '${property.bedrooms}')),
+                        child: MetricTile(
+                          label: 'Phòng ngủ',
+                          value: '${property.bedrooms}',
+                        ),
+                      ),
                       const SizedBox(width: 12),
                       Expanded(
-                          child: MetricTile(
-                              label: 'Phòng tắm',
-                              value: '${property.bathrooms}')),
+                        child: MetricTile(
+                          label: 'Phòng tắm',
+                          value: '${property.bathrooms}',
+                        ),
+                      ),
                       const SizedBox(width: 12),
                       Expanded(
-                          child: MetricTile(
-                              label: 'Diện tích', value: property.area)),
+                        child: MetricTile(
+                          label: 'Diện tích',
+                          value: property.area,
+                        ),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 18),
@@ -2473,23 +2488,26 @@ class PropertyDetailPage extends StatelessWidget {
                         const Text(
                           'Tham quan bất động sản 360/VR',
                           style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 22,
-                              fontWeight: FontWeight.w700),
+                            color: Colors.white,
+                            fontSize: 22,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                         const SizedBox(height: 10),
                         Text(
                           property.vrCopy,
                           style: const TextStyle(
-                              color: Colors.white70, height: 1.6),
+                            color: Colors.white70,
+                            height: 1.6,
+                          ),
                         ),
                         const SizedBox(height: 16),
                         FilledButton(
                           onPressed: () {
                             Navigator.of(context).push(
                               MaterialPageRoute(
-                                  builder: (_) =>
-                                      VrTourPage(property: property)),
+                                builder: (_) => VrTourPage(property: property),
+                              ),
                             );
                           },
                           style: FilledButton.styleFrom(
@@ -2497,7 +2515,8 @@ class PropertyDetailPage extends StatelessWidget {
                             foregroundColor: roomifyNavy,
                             minimumSize: const Size.fromHeight(54),
                             shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(18)),
+                              borderRadius: BorderRadius.circular(18),
+                            ),
                           ),
                           child: const Text('Mở tour 360/VR'),
                         ),
@@ -2520,8 +2539,10 @@ class PropertyDetailPage extends StatelessWidget {
                               end: Alignment.bottomRight,
                             ),
                           ),
-                          child: const Icon(CupertinoIcons.location_solid,
-                              color: roomifyGold),
+                          child: const Icon(
+                            CupertinoIcons.location_solid,
+                            color: roomifyGold,
+                          ),
                         ),
                         const SizedBox(width: 16),
                         Expanded(
@@ -2530,9 +2551,10 @@ class PropertyDetailPage extends StatelessWidget {
                             children: [
                               const LabelText('Vị trí'),
                               const SizedBox(height: 8),
-                              Text(property.location,
-                                  style:
-                                      Theme.of(context).textTheme.titleLarge),
+                              Text(
+                                property.location,
+                                style: Theme.of(context).textTheme.titleLarge,
+                              ),
                               const SizedBox(height: 8),
                               Text(
                                 'Kết nối thuận tiện tới trường học, dịch vụ ăn uống và các trục di chuyển chính.',
@@ -2548,9 +2570,8 @@ class PropertyDetailPage extends StatelessWidget {
                   OwnerInfoCard(
                     property: property,
                     primaryLabel: 'Liên hệ chủ nhà',
-                    onPrimaryAction: () => Navigator.of(context).pop(
-                      DetailAction.contact,
-                    ),
+                    onPrimaryAction: () =>
+                        Navigator.of(context).pop(DetailAction.contact),
                   ),
                   const SizedBox(height: 120),
                 ],
@@ -2587,18 +2608,16 @@ class VrTourPage extends StatelessWidget {
               const SizedBox(height: 10),
               Text(
                 'Tour 360 của ${property.title}',
-                style: Theme.of(context)
-                    .textTheme
-                    .headlineSmall
-                    ?.copyWith(color: Colors.white),
+                style: Theme.of(
+                  context,
+                ).textTheme.headlineSmall?.copyWith(color: Colors.white),
               ),
               const SizedBox(height: 10),
               Text(
                 property.vrCopy,
-                style: Theme.of(context)
-                    .textTheme
-                    .bodyLarge
-                    ?.copyWith(color: Colors.white70),
+                style: Theme.of(
+                  context,
+                ).textTheme.bodyLarge?.copyWith(color: Colors.white70),
               ),
               const SizedBox(height: 20),
               Expanded(
@@ -2703,9 +2722,7 @@ class VrTourPage extends StatelessWidget {
                 ),
               ],
               const SizedBox(height: 18),
-              MatterportDemoList(
-                currentUrl: property.matterportUrl,
-              ),
+              MatterportDemoList(currentUrl: property.matterportUrl),
             ],
           ),
         ),
@@ -2715,11 +2732,7 @@ class VrTourPage extends StatelessWidget {
 }
 
 class MatterportTourPage extends StatelessWidget {
-  const MatterportTourPage({
-    super.key,
-    required this.title,
-    required this.url,
-  });
+  const MatterportTourPage({super.key, required this.title, required this.url});
 
   final String title;
   final String url;
@@ -2745,10 +2758,9 @@ class MatterportTourPage extends StatelessWidget {
                 matterportEmbedSupported
                     ? 'Bạn có thể dùng các điểm tương tác sẵn có của Matterport để di chuyển phòng, lên tầng và xem không gian như tour thật.'
                     : 'Bản embed Matterport hiện hỗ trợ trên web demo. Hãy chạy bằng Chrome để dùng tương tác đầy đủ.',
-                style: Theme.of(context)
-                    .textTheme
-                    .bodyLarge
-                    ?.copyWith(color: Colors.white70),
+                style: Theme.of(
+                  context,
+                ).textTheme.bodyLarge?.copyWith(color: Colors.white70),
               ),
               const SizedBox(height: 16),
               Expanded(
@@ -2796,10 +2808,8 @@ class MatterportDemoList extends StatelessWidget {
                   onTap: () {
                     Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (_) => MatterportTourPage(
-                          title: demo.name,
-                          url: demo.url,
-                        ),
+                        builder: (_) =>
+                            MatterportTourPage(title: demo.name, url: demo.url),
                       ),
                     );
                   },
@@ -2880,17 +2890,17 @@ class NativeSliverHeader extends StatelessWidget {
           Text(title, style: Theme.of(context).textTheme.titleLarge),
         ],
       ),
-      actions: [
-        ...trailing,
-        const SizedBox(width: 20),
-      ],
+      actions: [...trailing, const SizedBox(width: 20)],
     );
   }
 }
 
 class HeaderIconButton extends StatelessWidget {
-  const HeaderIconButton(
-      {super.key, required this.icon, required this.onPressed});
+  const HeaderIconButton({
+    super.key,
+    required this.icon,
+    required this.onPressed,
+  });
 
   final IconData icon;
   final VoidCallback onPressed;
@@ -2961,8 +2971,10 @@ class ProfileAvatarButton extends StatelessWidget {
                 top: -4,
                 right: -4,
                 child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: roomifyGold,
                     borderRadius: BorderRadius.circular(999),
@@ -3051,8 +3063,10 @@ class PremiumHeroCard extends StatelessWidget {
               const LabelText('Tính năng nổi bật', color: roomifyGold),
               const Spacer(),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
                 decoration: BoxDecoration(
                   color: Colors.white.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(999),
@@ -3072,18 +3086,16 @@ class PremiumHeroCard extends StatelessWidget {
           const SizedBox(height: 10),
           Text(
             'Tham quan ${property.title} ngay trên điện thoại',
-            style: Theme.of(context)
-                .textTheme
-                .headlineSmall
-                ?.copyWith(color: Colors.white),
+            style: Theme.of(
+              context,
+            ).textTheme.headlineSmall?.copyWith(color: Colors.white),
           ),
           const SizedBox(height: 10),
           Text(
             'Xem trước bố cục, ánh sáng và vật liệu hoàn thiện với trải nghiệm VR được đặt ở vị trí trung tâm của sản phẩm.',
-            style: Theme.of(context)
-                .textTheme
-                .bodyLarge
-                ?.copyWith(color: Colors.white70),
+            style: Theme.of(
+              context,
+            ).textTheme.bodyLarge?.copyWith(color: Colors.white70),
           ),
           const SizedBox(height: 14),
           Wrap(
@@ -3103,7 +3115,8 @@ class PremiumHeroCard extends StatelessWidget {
               foregroundColor: roomifyNavy,
               minimumSize: const Size.fromHeight(52),
               shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(18)),
+                borderRadius: BorderRadius.circular(18),
+              ),
             ),
             child: const Text('Mở tour 360'),
           ),
@@ -3114,8 +3127,11 @@ class PremiumHeroCard extends StatelessWidget {
 }
 
 class SectionHeading extends StatelessWidget {
-  const SectionHeading(
-      {super.key, required this.title, required this.trailing});
+  const SectionHeading({
+    super.key,
+    required this.title,
+    required this.trailing,
+  });
 
   final String title;
   final Widget trailing;
@@ -3200,8 +3216,9 @@ class PropertyCard extends StatelessWidget {
             Stack(
               children: [
                 ClipRRect(
-                  borderRadius:
-                      const BorderRadius.vertical(top: Radius.circular(28)),
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(28),
+                  ),
                   child: PropertyArt(property: property, height: imageHeight),
                 ),
                 Positioned(
@@ -3328,9 +3345,7 @@ class SaveIconButton extends StatelessWidget {
         backgroundColor: Colors.white.withValues(alpha: 0.92),
         foregroundColor: isSaved ? roomifyGold : roomifyNavy,
       ),
-      icon: Icon(
-        isSaved ? CupertinoIcons.heart_fill : CupertinoIcons.heart,
-      ),
+      icon: Icon(isSaved ? CupertinoIcons.heart_fill : CupertinoIcons.heart),
     );
   }
 }
@@ -3392,7 +3407,7 @@ class PropertyArt extends StatelessWidget {
                 gradient: LinearGradient(
                   colors: [
                     Colors.white.withValues(alpha: 0.18),
-                    Colors.transparent
+                    Colors.transparent,
                   ],
                   begin: Alignment.bottomCenter,
                   end: Alignment.topCenter,
@@ -3528,11 +3543,15 @@ class SelectedPropertyCard extends StatelessWidget {
               children: [
                 const LabelText('Bất động sản đã chọn'),
                 const SizedBox(height: 8),
-                Text(property.title,
-                    style: Theme.of(context).textTheme.titleMedium),
+                Text(
+                  property.title,
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
                 const SizedBox(height: 6),
-                Text(property.location,
-                    style: Theme.of(context).textTheme.bodyMedium),
+                Text(
+                  property.location,
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
               ],
             ),
           ),
@@ -3657,8 +3676,9 @@ class AuthAccessCard extends StatelessWidget {
                   onPressed: onLogin,
                   style: OutlinedButton.styleFrom(
                     minimumSize: const Size.fromHeight(50),
-                    side:
-                        BorderSide(color: roomifyNavy.withValues(alpha: 0.12)),
+                    side: BorderSide(
+                      color: roomifyNavy.withValues(alpha: 0.12),
+                    ),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(18),
                     ),
@@ -3781,9 +3801,13 @@ class _AuthSheetState extends State<AuthSheet> {
                 showSelectedIcon: false,
                 segments: const [
                   ButtonSegment(
-                      value: AuthMode.login, label: Text('Đăng nhập')),
+                    value: AuthMode.login,
+                    label: Text('Đăng nhập'),
+                  ),
                   ButtonSegment(
-                      value: AuthMode.register, label: Text('Đăng ký')),
+                    value: AuthMode.register,
+                    label: Text('Đăng ký'),
+                  ),
                 ],
                 selected: {_mode},
                 onSelectionChanged: (selection) {
@@ -4045,8 +4069,12 @@ class AppDropdownField<T> extends StatelessWidget {
         DropdownButtonFormField<T>(
           value: value,
           items: items
-              .map((item) => DropdownMenuItem<T>(
-                  value: item, child: Text(item.toString())))
+              .map(
+                (item) => DropdownMenuItem<T>(
+                  value: item,
+                  child: Text(item.toString()),
+                ),
+              )
               .toList(),
           onChanged: onChanged,
           decoration: InputDecoration(
@@ -4139,9 +4167,13 @@ class HotspotChip extends StatelessWidget {
           borderRadius: BorderRadius.circular(999),
           border: Border.all(color: Colors.white.withValues(alpha: 0.3)),
         ),
-        child: Text(label,
-            style: const TextStyle(
-                color: Colors.white, fontWeight: FontWeight.w700)),
+        child: Text(
+          label,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
       );
     }
 
@@ -4157,20 +4189,20 @@ class HotspotChip extends StatelessWidget {
           borderRadius: BorderRadius.circular(999),
           border: Border.all(color: Colors.white.withValues(alpha: 0.3)),
         ),
-        child: Text(label,
-            style: const TextStyle(
-                color: Colors.white, fontWeight: FontWeight.w700)),
+        child: Text(
+          label,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
       ),
     );
   }
 }
 
 class VrOverlayChip extends StatelessWidget {
-  const VrOverlayChip({
-    super.key,
-    required this.icon,
-    required this.label,
-  });
+  const VrOverlayChip({super.key, required this.icon, required this.label});
 
   final IconData icon;
   final String label;
@@ -4218,8 +4250,10 @@ class VrTag extends StatelessWidget {
       ),
       child: Text(
         label,
-        style:
-            const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w700,
+        ),
       ),
     );
   }
@@ -4241,7 +4275,10 @@ class InfoPill extends StatelessWidget {
       child: Text(
         label,
         style: const TextStyle(
-            color: roomifyNavy, fontWeight: FontWeight.w800, fontSize: 12),
+          color: roomifyNavy,
+          fontWeight: FontWeight.w800,
+          fontSize: 12,
+        ),
       ),
     );
   }

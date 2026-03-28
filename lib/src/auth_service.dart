@@ -1,4 +1,5 @@
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
 
 /// Kết quả trả về từ các thao tác đăng nhập / đăng ký.
 class AuthResult {
@@ -16,13 +17,14 @@ class AuthService {
 
   static final AuthService instance = AuthService._();
 
-  final _auth = FirebaseAuth.instance;
+  bool get _ready => Firebase.apps.isNotEmpty;
 
   /// Người dùng hiện tại (null nếu chưa đăng nhập).
-  User? get currentUser => _auth.currentUser;
+  User? get currentUser => _ready ? FirebaseAuth.instance.currentUser : null;
 
   /// Stream theo dõi trạng thái xác thực.
-  Stream<User?> get authStateChanges => _auth.authStateChanges();
+  Stream<User?> get authStateChanges =>
+      _ready ? FirebaseAuth.instance.authStateChanges() : Stream.value(null);
 
   /// Đăng ký tài khoản mới bằng email và mật khẩu.
   Future<AuthResult> register({
@@ -30,8 +32,15 @@ class AuthService {
     required String email,
     required String password,
   }) async {
+    if (!_ready) {
+      return const AuthResult(
+        errorMessage:
+            '(Demo) Firebase chưa được cấu hình. Hãy chạy “flutterfire configure”.',
+      );
+    }
     try {
-      final credential = await _auth.createUserWithEmailAndPassword(
+      final credential =
+          await FirebaseAuth.instance.createUserWithEmailAndPassword(
         email: email.trim(),
         password: password,
       );
@@ -49,8 +58,14 @@ class AuthService {
     required String email,
     required String password,
   }) async {
+    if (!_ready) {
+      return const AuthResult(
+        errorMessage:
+            '(Demo) Firebase chưa được cấu hình. Hãy chạy “flutterfire configure”.',
+      );
+    }
     try {
-      final credential = await _auth.signInWithEmailAndPassword(
+      final credential = await FirebaseAuth.instance.signInWithEmailAndPassword(
         email: email.trim(),
         password: password,
       );
@@ -63,7 +78,8 @@ class AuthService {
   }
 
   /// Đăng xuất.
-  Future<void> signOut() => _auth.signOut();
+  Future<void> signOut() =>
+      _ready ? FirebaseAuth.instance.signOut() : Future.value();
 
   String _mapError(FirebaseAuthException e) {
     switch (e.code) {

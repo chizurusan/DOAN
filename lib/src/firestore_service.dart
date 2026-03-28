@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
 
 /// Dịch vụ thao tác với Cloud Firestore.
 ///
@@ -19,12 +20,14 @@ class FirestoreService {
 
   static final FirestoreService instance = FirestoreService._();
 
-  final _db = FirebaseFirestore.instance;
+  bool get _ready => Firebase.apps.isNotEmpty;
+  FirebaseFirestore get _db => FirebaseFirestore.instance;
 
   // ── User profile ────────────────────────────────────────────────
 
   /// Tạo hoặc cập nhật hồ sơ người dùng sau khi đăng ký / đăng nhập.
   Future<void> upsertUserProfile(User user) async {
+    if (!_ready) return;
     final ref = _db.collection('users').doc(user.uid);
     final snap = await ref.get();
     if (!snap.exists) {
@@ -40,20 +43,20 @@ class FirestoreService {
 
   /// Lấy hồ sơ người dùng. Trả về null nếu chưa có.
   Future<Map<String, dynamic>?> getUserProfile(String uid) async {
+    if (!_ready) return null;
     final snap = await _db.collection('users').doc(uid).get();
     return snap.data();
   }
 
   /// Cập nhật gói thành viên của người dùng.
   Future<void> updateMembershipTier(String uid, String? tier) {
-    return _db
-        .collection('users')
-        .doc(uid)
-        .update({'membershipTier': tier});
+    if (!_ready) return Future.value();
+    return _db.collection('users').doc(uid).update({'membershipTier': tier});
   }
 
   /// Lưu / bỏ lưu một bất động sản.
   Future<void> toggleSavedProperty(String uid, int propertyId) async {
+    if (!_ready) return;
     final ref = _db.collection('users').doc(uid);
     final snap = await ref.get();
     final ids = List<int>.from(
@@ -69,9 +72,11 @@ class FirestoreService {
 
   /// Trả về danh sách id bất động sản đã lưu.
   Future<Set<int>> getSavedPropertyIds(String uid) async {
+    if (!_ready) return {};
     final snap = await _db.collection('users').doc(uid).get();
-    final ids =
-        (snap.data()?['savedPropertyIds'] as List? ?? []).map((e) => e as int);
+    final ids = (snap.data()?['savedPropertyIds'] as List? ?? []).map(
+      (e) => e as int,
+    );
     return ids.toSet();
   }
 
@@ -87,8 +92,9 @@ class FirestoreService {
     required String type, // 'book' | 'contact'
     String? schedule,
     String? notes,
-  }) {
-    return _db.collection('bookings').add({
+  }) async {
+    if (!_ready) return;
+    await _db.collection('bookings').add({
       'userId': userId,
       'propertyId': propertyId,
       'propertyTitle': propertyTitle,
@@ -104,7 +110,7 @@ class FirestoreService {
   // ── Posted properties ─────────────────────────────────────────────
 
   /// Lưu tin đăng bất động sản của chủ nhà.
-  Future<DocumentReference> postProperty({
+  Future<void> postProperty({
     required String userId,
     required String title,
     required String price,
@@ -112,8 +118,9 @@ class FirestoreService {
     required String type,
     String? imageUrl,
     String? vrUrl,
-  }) {
-    return _db.collection('posted_properties').add({
+  }) async {
+    if (!_ready) return;
+    await _db.collection('posted_properties').add({
       'userId': userId,
       'title': title.trim(),
       'price': price.trim(),
