@@ -13,14 +13,21 @@ import 'package:firebase_core/firebase_core.dart';
 /// │    userId, propertyId, propertyTitle, name, phone, schedule,
 /// │    notes, type ('book' | 'contact'), createdAt
 /// │
-/// └─ posted_properties/{id}
-///      userId, title, price, location, type, imageUrl, vrUrl, createdAt
+/// ├─ posted_properties/{id}
+/// │    userId, title, price, location, type, imageUrl, vrUrl, createdAt
+/// │
+/// └─ chats/{sessionId}/messages/{messageId}
+///      text, isUser, timestamp
 class FirestoreService {
   FirestoreService._();
 
   static final FirestoreService instance = FirestoreService._();
 
   bool get _ready => Firebase.apps.isNotEmpty;
+
+  /// Kiểm tra Firebase đã sẵn sàng chưa (dùng cho UI).
+  bool get isReady => _ready;
+
   FirebaseFirestore get _db => FirebaseFirestore.instance;
 
   // ── User profile ────────────────────────────────────────────────
@@ -34,9 +41,18 @@ class FirestoreService {
       await ref.set({
         'name': user.displayName ?? '',
         'email': user.email ?? '',
+        'phone': '',
         'membershipTier': null,
         'savedPropertyIds': <int>[],
         'createdAt': FieldValue.serverTimestamp(),
+      });
+    } else {
+      // Cập nhật name/email mỗi lần đăng nhập (giữ nguyên các trường khác)
+      await ref.update({
+        'name': user.displayName?.isNotEmpty == true
+            ? user.displayName!
+            : (snap.data()?['name'] ?? ''),
+        'email': user.email ?? '',
       });
     }
   }
@@ -46,6 +62,34 @@ class FirestoreService {
     if (!_ready) return null;
     final snap = await _db.collection('users').doc(uid).get();
     return snap.data();
+  }
+
+  /// Cập nhật số điện thoại người dùng.
+  Future<void> updateUserPhone(String uid, String phone) async {
+    if (!_ready) return;
+    await _db.collection('users').doc(uid).update({'phone': phone.trim()});
+  }
+
+  /// Đếm số tin đăng của người dùng.
+  Future<int> getUserPostingsCount(String uid) async {
+    if (!_ready) return 0;
+    final snap = await _db
+        .collection('posted_properties')
+        .where('userId', isEqualTo: uid)
+        .count()
+        .get();
+    return snap.count ?? 0;
+  }
+
+  /// Đếm số cuộc trò chuyện thành viên của người dùng.
+  Future<int> getUserConversationsCount(String uid) async {
+    if (!_ready) return 0;
+    final snap = await _db
+        .collection('member_chats')
+        .where('participants', arrayContains: uid)
+        .count()
+        .get();
+    return snap.count ?? 0;
   }
 
   /// Cập nhật gói thành viên của người dùng.
@@ -112,6 +156,7 @@ class FirestoreService {
   /// Lưu tin đăng bất động sản của chủ nhà.
   Future<void> postProperty({
     required String userId,
+    required String ownerName,
     required String title,
     required String price,
     required String location,
@@ -122,6 +167,7 @@ class FirestoreService {
     if (!_ready) return;
     await _db.collection('posted_properties').add({
       'userId': userId,
+      'ownerName': ownerName,
       'title': title.trim(),
       'price': price.trim(),
       'location': location.trim(),
@@ -131,5 +177,147 @@ class FirestoreService {
       'status': 'pending', // pending | published | rejected
       'createdAt': FieldValue.serverTimestamp(),
     });
+  }
+
+  /// Stream danh sách tin đã đăng (dùng cho Khám phá).
+  Stream<List<Map<String, dynamic>>> getPostedPropertiesStream() {
+    if (!_ready) return const Stream.empty();
+    return _db
+        .collection('posted_properties')
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .map((snap) => snap.docs
+            .where((doc) => doc.data()['status'] != 'rejected')
+            .map((doc) => {'_id': doc.id, ...doc.data()})
+            .toList());
+  }
+
+  // ── Member Chat ───────────────────────────────────────────────────────────
+
+  String _chatId(String uid1, String uid2) {
+    final sorted = [uid1, uid2]..sort();
+    return sorted.join('_');
+  }
+
+  /// Tạo hoặc lấy phòng chat giữa 2 người dùng, trả về chatId.
+  Future<String> initMemberChat({
+    required String uid1,
+    required String name1,
+    required String uid2,
+    required String name2,
+    String? propertyTitle,
+  }) async {
+    final chatId = _chatId(uid1, uid2);
+    if (!_ready) return chatId;
+    final sorted = [uid1, uid2]..sort();
+    await _db.collection('member_chats').doc(chatId).set({
+      'participants': sorted,
+      'participantNames': {uid1: name1, uid2: name2},
+      'createdAt': FieldValue.serverTimestamp(),
+      if (propertyTitle != null) 'propertyTitle': propertyTitle,
+    }, SetOptions(merge: true));
+    return chatId;
+  }
+
+  /// Gửi tin nhắn giữa thành viên.
+  Future<void> sendMemberMessage({
+    required String chatId,
+    required String senderId,
+    required String senderName,
+    required String text,
+    String? propertyTitle,
+  }) async {
+    if (!_ready) return;
+    final chatRef = _db.collection('member_chats').doc(chatId);
+    await chatRef.set({
+      'lastMessage': text,
+      'lastTime': FieldValue.serverTimestamp(),
+      if (propertyTitle != null) 'propertyTitle': propertyTitle,
+    }, SetOptions(merge: true));
+    await chatRef.collection('messages').add({
+      'senderId': senderId,
+      'senderName': senderName,
+      'text': text,
+      'timestamp': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// Stream tin nhắn realtime của một phòng chat.
+  Stream<QuerySnapshot<Map<String, dynamic>>> getMemberMessagesStream(
+      String chatId) {
+    if (!_ready) return const Stream.empty();
+    return _db
+        .collection('member_chats')
+        .doc(chatId)
+        .collection('messages')
+        .orderBy('timestamp')
+        .snapshots();
+  }
+
+  /// Stream danh sách hội thoại của người dùng.
+  Stream<QuerySnapshot<Map<String, dynamic>>> getMyConversationsStream(
+      String userId) {
+    if (!_ready) return const Stream.empty();
+    return _db
+        .collection('member_chats')
+        .where('participants', arrayContains: userId)
+        .snapshots();
+  }
+
+  // ── Chat Bot ─────────────────────────────────────────────────────
+
+  /// Lưu một tin nhắn chat vào Firestore.
+  /// Cấu trúc: chats/{sessionId}/messages/{auto-id}
+  Future<void> saveChatMessage({
+    required String sessionId,
+    required String text,
+    required bool isUser,
+  }) async {
+    if (!_ready) return;
+    await _db.collection('chats').doc(sessionId).collection('messages').add({
+      'text': text,
+      'isUser': isUser,
+      'timestamp': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// Lấy lịch sử chat của một session (sắp xếp theo thời gian tăng dần).
+  Future<List<Map<String, dynamic>>> getChatHistory(String sessionId) async {
+    if (!_ready) return [];
+    final snap = await _db
+        .collection('chats')
+        .doc(sessionId)
+        .collection('messages')
+        .orderBy('timestamp')
+        .get();
+    return snap.docs.map((doc) => {'id': doc.id, ...doc.data()}).toList();
+  }
+
+  /// Stream lịch sử chat theo thời gian thực (dùng cho real-time chat).
+  Stream<QuerySnapshot<Map<String, dynamic>>> chatStream(String sessionId) {
+    if (!_ready) {
+      return const Stream.empty();
+    }
+    return _db
+        .collection('chats')
+        .doc(sessionId)
+        .collection('messages')
+        .orderBy('timestamp')
+        .snapshots();
+  }
+
+  /// Xóa toàn bộ lịch sử chat của một session.
+  Future<void> clearChatHistory(String sessionId) async {
+    if (!_ready) return;
+    final snap = await _db
+        .collection('chats')
+        .doc(sessionId)
+        .collection('messages')
+        .get();
+    final batch = _db.batch();
+    for (final doc in snap.docs) {
+      batch.delete(doc.reference);
+    }
+    await batch.commit();
   }
 }

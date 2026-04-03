@@ -42,47 +42,46 @@ class DefaultFirebaseOptions {
   }
 
   // ── Web ──────────────────────────────────────────────────────────
-  // Lấy từ: Firebase Console → Project Settings → My Apps → Web App
   static const FirebaseOptions web = FirebaseOptions(
-    apiKey: 'YOUR_WEB_API_KEY',
-    appId: 'YOUR_WEB_APP_ID',
-    messagingSenderId: 'YOUR_MESSAGING_SENDER_ID',
-    projectId: 'YOUR_PROJECT_ID',
-    authDomain: 'YOUR_PROJECT_ID.firebaseapp.com',
-    storageBucket: 'YOUR_PROJECT_ID.appspot.com',
+    apiKey: 'AIzaSyDOKqzUNDunOaYRbtwKRMRgOKFclc3q3_k',
+    appId: '1:916069537337:web:18c694b8bfc1adb15a1fe8',
+    messagingSenderId: '916069537337',
+    projectId: 'doankn',
+    authDomain: 'doankn.firebaseapp.com',
+    storageBucket: 'doankn.firebasestorage.app',
+    measurementId: 'G-R5LE8YW2WY',
   );
 
   // ── Android ──────────────────────────────────────────────────────
-  // Lấy từ: Firebase Console → Project Settings → My Apps → Android App
-  // hoặc từ google-services.json
+  // Cần thêm Android app trong Firebase Console + tải google-services.json
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'YOUR_ANDROID_API_KEY',
+    apiKey: 'AIzaSyDOKqzUNDunOaYRbtwKRMRgOKFclc3q3_k',
     appId: 'YOUR_ANDROID_APP_ID',
-    messagingSenderId: 'YOUR_MESSAGING_SENDER_ID',
-    projectId: 'YOUR_PROJECT_ID',
-    storageBucket: 'YOUR_PROJECT_ID.appspot.com',
+    messagingSenderId: '916069537337',
+    projectId: 'doankn',
+    storageBucket: 'doankn.firebasestorage.app',
   );
 
   // ── iOS ──────────────────────────────────────────────────────────
-  // Lấy từ: Firebase Console → Project Settings → My Apps → iOS App
-  // hoặc từ GoogleService-Info.plist
+  // Cần thêm iOS app trong Firebase Console
   static const FirebaseOptions ios = FirebaseOptions(
-    apiKey: 'YOUR_IOS_API_KEY',
+    apiKey: 'AIzaSyDOKqzUNDunOaYRbtwKRMRgOKFclc3q3_k',
     appId: 'YOUR_IOS_APP_ID',
-    messagingSenderId: 'YOUR_MESSAGING_SENDER_ID',
-    projectId: 'YOUR_PROJECT_ID',
-    storageBucket: 'YOUR_PROJECT_ID.appspot.com',
+    messagingSenderId: '916069537337',
+    projectId: 'doankn',
+    storageBucket: 'doankn.firebasestorage.app',
     iosBundleId: 'com.example.roomifyMvp',
   );
 
   // ── Windows ──────────────────────────────────────────────────────
-  // Sau khi chạy "flutterfire configure", giá trị Windows sẽ được tạo.
+  // Dùng chung config Web cho Windows desktop
   static const FirebaseOptions windows = FirebaseOptions(
-    apiKey: 'YOUR_WINDOWS_API_KEY',
-    appId: 'YOUR_WINDOWS_APP_ID',
-    messagingSenderId: 'YOUR_MESSAGING_SENDER_ID',
-    projectId: 'YOUR_PROJECT_ID',
-    authDomain: 'YOUR_PROJECT_ID.firebaseapp.com',
-    storageBucket: 'YOUR_PROJECT_ID.appspot.com',
+    apiKey: 'AIzaSyDOKqzUNDunOaYRbtwKRMRgOKFclc3q3_k',
+    appId: '1:916069537337:web:18c694b8bfc1adb15a1fe8',
+    messagingSenderId: '916069537337',
+    projectId: 'doankn',
+    authDomain: 'doankn.firebaseapp.com',
+    storageBucket: 'doankn.firebasestorage.app',
+    measurementId: 'G-R5LE8YW2WY',
   );
 }

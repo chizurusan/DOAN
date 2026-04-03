@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:io' as import_io;
+
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/cupertino.dart';
@@ -6,10 +9,16 @@ import 'package:flutter/services.dart';
 import 'package:panorama/panorama.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import 'package:image_picker/image_picker.dart';
+
 import 'src/firebase_options.dart';
 import 'src/auth_service.dart';
+import 'src/chat_screen.dart';
 import 'src/firestore_service.dart';
+import 'src/image_upload_service.dart';
 import 'src/matterport_embed.dart';
+import 'src/member_chat_screen.dart';
+import 'src/profile_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -31,7 +40,7 @@ const Color roomifyMist = Color(0xFFE9EFF7);
 const Color roomifyText = Color(0xFF13233D);
 const Color roomifyMuted = Color(0xFF68758B);
 
-enum AppTab { home, listings, connect, post }
+enum AppTab { home, listings, connect, messages, post }
 
 enum ConnectMode { book, contact }
 
@@ -329,6 +338,68 @@ class _RoomifyShellState extends State<RoomifyShell> {
   ConnectMode _connectMode = ConnectMode.book;
   PropertyItem _selectedProperty = mockProperties.first;
   final Set<int> _savedPropertyIds = <int>{};
+  final List<PropertyItem> _firestoreProperties = [];
+  StreamSubscription<List<Map<String, dynamic>>>? _postedSub;
+
+  @override
+  void initState() {
+    super.initState();
+    _subscribePostedProperties();
+  }
+
+  void _subscribePostedProperties() {
+    _postedSub =
+        FirestoreService.instance.getPostedPropertiesStream().listen((list) {
+      if (!mounted) return;
+      setState(() {
+        _firestoreProperties
+          ..clear()
+          ..addAll(list.map(_docToProperty));
+      });
+    });
+  }
+
+  PropertyItem _docToProperty(Map<String, dynamic> data) {
+    final vrUrl = data['vrUrl'] as String?;
+    // Dùng URL 360 demo nếu chủ nhà chưa nhập link VR
+    final panorama = (vrUrl?.isNotEmpty == true) ? vrUrl : demoPanoramaUrl;
+    // Chọn Matterport demo xoay vòng dựa theo hash của doc id
+    final docId = data['_id'] as String? ?? '';
+    final demoMatterport =
+        matterportDemos[docId.hashCode.abs() % matterportDemos.length].url;
+
+    return PropertyItem(
+      id: docId.hashCode.abs(),
+      title: data['title'] as String? ?? 'Không có tiêu đề',
+      location: data['location'] as String? ?? 'Không xác định',
+      type: data['type'] as String? ?? 'Căn hộ',
+      price: data['price'] as String? ?? 'Thương lượng',
+      numericPrice: 0,
+      bedrooms: 0,
+      bathrooms: 0,
+      area: 'Đang cập nhật',
+      description: 'Tin đăng từ chủ nhà trên Roomify.',
+      vrCopy: vrUrl?.isNotEmpty == true
+          ? 'Chủ nhà đã cung cấp link tham quan 360 riêng.'
+          : 'Tour VR 360 mẫu – Chủ nhà có thể cập nhật link thực tế sau.',
+      tags: const ['Mới đăng', 'Chủ nhà'],
+      featured: false,
+      colors: const [Color(0xFF19365D), roomifyGold, Color(0xFFE7EEF8)],
+      ownerName: data['ownerName'] as String? ?? 'Chủ nhà',
+      ownerRole: 'Chủ nhà',
+      ownerPhone: '',
+      imageUrl: data['imageUrl'] as String?,
+      panoramaUrl: panorama,
+      matterportUrl: demoMatterport,
+      ownerId: data['userId'] as String?,
+    );
+  }
+
+  @override
+  void dispose() {
+    _postedSub?.cancel();
+    super.dispose();
+  }
 
   @override
   void didUpdateWidget(covariant RoomifyShell oldWidget) {
@@ -357,14 +428,18 @@ class _RoomifyShellState extends State<RoomifyShell> {
 
   Future<void> _handleProfileTap() async {
     if (widget.isAuthenticated) {
-      final user = AuthService.instance.currentUser;
-      final name = user?.displayName ?? user?.email ?? 'bạn';
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Đang đăng nhập với tài khoản $name.')),
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => ProfileScreen(
+            onLogout: () {
+              // Logout được xử lý bởi AuthService, state sẽ tự cập nhật
+              // qua authStateChanges stream ở cấp độ RoomifyApp.
+            },
+          ),
+        ),
       );
       return;
     }
-
     await widget.onOpenAuth(AuthMode.login);
   }
 
@@ -456,6 +531,7 @@ class _RoomifyShellState extends State<RoomifyShell> {
 
   @override
   Widget build(BuildContext context) {
+    final allProperties = [...mockProperties, ..._firestoreProperties];
     final pages = <Widget>[
       HomeScreen(
         featured:
@@ -470,7 +546,7 @@ class _RoomifyShellState extends State<RoomifyShell> {
         membershipTier: widget.membershipTier,
       ),
       ListingsScreen(
-        properties: mockProperties,
+        properties: allProperties,
         onOpenProperty: _openProperty,
         onToggleSaved: _toggleSaved,
         savedPropertyIds: _savedPropertyIds,
@@ -481,6 +557,7 @@ class _RoomifyShellState extends State<RoomifyShell> {
         isAuthenticated: widget.isAuthenticated,
         onOpenAuth: widget.onOpenAuth,
       ),
+      const MemberConversationsScreen(),
       PostPropertyScreen(
         isAuthenticated: widget.isAuthenticated,
         membershipTier: widget.membershipTier,
@@ -497,31 +574,71 @@ class _RoomifyShellState extends State<RoomifyShell> {
     ];
 
     return Scaffold(
-      body: IndexedStack(index: _currentTab.index, children: pages),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _openVr(_selectedProperty),
-        backgroundColor: roomifyGold,
-        foregroundColor: roomifyNavy,
-        icon: const Icon(CupertinoIcons.viewfinder_circle_fill),
-        label: const Text('Xem VR'),
+      body: Stack(
+        children: [
+          IndexedStack(index: _currentTab.index, children: pages),
+          // Nút Xem VR — chính giữa, sát trên thanh nav
+          Positioned(
+            bottom: 80,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: FloatingActionButton.extended(
+                heroTag: 'vr_fab',
+                onPressed: () => _openVr(_selectedProperty),
+                backgroundColor: roomifyGold,
+                foregroundColor: roomifyNavy,
+                elevation: 6,
+                icon: const Icon(CupertinoIcons.viewfinder_circle_fill),
+                label: const Text(
+                  'Xem VR',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+            ),
+          ),
+          // Nút Chat Bot — góc phải, cùng hàng nút VR
+          Positioned(
+            right: 16,
+            bottom: 86,
+            child: FloatingActionButton(
+              heroTag: 'chatbot_fab',
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const ChatBotScreen()),
+                );
+              },
+              backgroundColor: roomifyNavy,
+              foregroundColor: roomifyGold,
+              mini: true,
+              elevation: 4,
+              tooltip: 'Chat Bot AI',
+              child: const Icon(CupertinoIcons.chat_bubble_text_fill),
+            ),
+          ),
+        ],
       ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
       bottomNavigationBar: NavigationBar(
-        height: 78,
+        height: 72,
         selectedIndex: _currentTab.index,
         backgroundColor: roomifyNavy,
-        indicatorColor: roomifyGold.withValues(alpha: 0.18),
-        labelTextStyle: WidgetStateProperty.all(
-          const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
-        ),
+        indicatorColor: roomifyGold.withValues(alpha: 0.22),
+        labelTextStyle: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) {
+            return const TextStyle(
+                fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white);
+          }
+          return const TextStyle(
+              fontSize: 11, fontWeight: FontWeight.w500, color: Colors.white60);
+        }),
         destinations: const [
           NavigationDestination(
-            icon: Icon(CupertinoIcons.house, color: Colors.white70),
+            icon: Icon(CupertinoIcons.house, color: Colors.white60),
             selectedIcon: Icon(CupertinoIcons.house_fill, color: Colors.white),
             label: 'Trang chủ',
           ),
           NavigationDestination(
-            icon: Icon(CupertinoIcons.square_grid_2x2, color: Colors.white70),
+            icon: Icon(CupertinoIcons.square_grid_2x2, color: Colors.white60),
             selectedIcon: Icon(
               CupertinoIcons.square_grid_2x2_fill,
               color: Colors.white,
@@ -529,15 +646,23 @@ class _RoomifyShellState extends State<RoomifyShell> {
             label: 'Khám phá',
           ),
           NavigationDestination(
-            icon: Icon(CupertinoIcons.chat_bubble_2, color: Colors.white70),
+            icon: Icon(CupertinoIcons.phone, color: Colors.white60),
             selectedIcon: Icon(
-              CupertinoIcons.chat_bubble_2_fill,
+              CupertinoIcons.phone_fill,
               color: Colors.white,
             ),
             label: 'Liên hệ',
           ),
           NavigationDestination(
-            icon: Icon(CupertinoIcons.add_circled, color: Colors.white70),
+            icon: Icon(CupertinoIcons.chat_bubble_2, color: Colors.white60),
+            selectedIcon: Icon(
+              CupertinoIcons.chat_bubble_2_fill,
+              color: Colors.white,
+            ),
+            label: 'Tin nhắn',
+          ),
+          NavigationDestination(
+            icon: Icon(CupertinoIcons.add_circled, color: Colors.white60),
             selectedIcon: Icon(
               CupertinoIcons.add_circled_solid,
               color: Colors.white,
@@ -1203,6 +1328,30 @@ class _ConnectScreenState extends State<ConnectScreen> {
                       _submit();
                     },
                   ),
+                  // Nút nhắn tin trực tiếp (chỉ hiện với tin đăng từ Firestore)
+                  Builder(builder: (context) {
+                    final ownerId = widget.property.ownerId;
+                    final currentUid = AuthService.instance.currentUser?.uid;
+                    if (!widget.isAuthenticated ||
+                        ownerId == null ||
+                        ownerId == currentUid) {
+                      return const SizedBox.shrink();
+                    }
+                    final currentName =
+                        AuthService.instance.currentUser?.displayName ??
+                            AuthService.instance.currentUser?.email ??
+                            'Thành viên';
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 10),
+                      child: StartChatButton(
+                        ownerId: ownerId,
+                        ownerName: widget.property.ownerName,
+                        propertyTitle: widget.property.title,
+                        currentUserId: currentUid!,
+                        currentUserName: currentName,
+                      ),
+                    );
+                  }),
                   const SizedBox(height: 18),
                   SegmentedButton<ConnectMode>(
                     showSelectedIcon: false,
@@ -1311,23 +1460,62 @@ class _PostPropertyScreenState extends State<PostPropertyScreen> {
   final _titleController = TextEditingController();
   final _priceController = TextEditingController();
   final _locationController = TextEditingController();
-  final _imageController = TextEditingController();
   final _vrController = TextEditingController();
   String _type = 'Căn hộ';
   PropertyItem? _draft;
+  XFile? _pickedImage;
+  String? _uploadedImageUrl;
+  bool _isUploading = false;
+  double _uploadProgress = 0;
 
   @override
   void dispose() {
     _titleController.dispose();
     _priceController.dispose();
     _locationController.dispose();
-    _imageController.dispose();
     _vrController.dispose();
     super.dispose();
   }
 
-  void _createPreview() {
+  Future<void> _pickImage() async {
+    final file = await ImageUploadService.pickImage();
+    if (file == null) return;
+    setState(() {
+      _pickedImage = file;
+      _uploadedImageUrl = null;
+    });
+  }
+
+  Future<void> _createPreview() async {
     final postingPrice = widget.membershipTier == null ? '50.000đ' : '0đ';
+
+    // Upload ảnh nếu người dùng đã chọn nhưng chưa upload.
+    if (_pickedImage != null && _uploadedImageUrl == null) {
+      final uid = AuthService.instance.currentUser?.uid ?? 'anonymous';
+      setState(() {
+        _isUploading = true;
+        _uploadProgress = 0;
+      });
+      try {
+        final url = await ImageUploadService.uploadPropertyImage(
+          _pickedImage!,
+          uid,
+          onProgress: (p) => setState(() => _uploadProgress = p),
+        );
+        setState(() {
+          _uploadedImageUrl = url;
+          _isUploading = false;
+        });
+      } catch (e) {
+        setState(() => _isUploading = false);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Lỗi tải ảnh: $e')),
+          );
+        }
+        return;
+      }
+    }
 
     final title =
         _titleController.text.isEmpty ? 'Tin đăng nháp' : _titleController.text;
@@ -1358,7 +1546,7 @@ class _PostPropertyScreenState extends State<PostPropertyScreen> {
       ownerName: AuthService.instance.currentUser?.displayName ?? 'Chủ nhà',
       ownerRole: 'Người đăng tin',
       ownerPhone: '0900 000 999',
-      imageUrl: _imageController.text.isEmpty ? null : _imageController.text,
+      imageUrl: _uploadedImageUrl,
       panoramaUrl: _vrController.text.isEmpty ? null : _vrController.text,
       matterportUrl: null,
     );
@@ -1371,13 +1559,17 @@ class _PostPropertyScreenState extends State<PostPropertyScreen> {
     // Lưu tin đăng lên Firestore nếu người dùng đã đăng nhập.
     final uid = AuthService.instance.currentUser?.uid;
     if (uid != null) {
+      final ownerName = AuthService.instance.currentUser?.displayName ??
+          AuthService.instance.currentUser?.email ??
+          'Chủ nhà';
       FirestoreService.instance.postProperty(
         userId: uid,
+        ownerName: ownerName,
         title: title,
         price: price,
         location: location,
         type: _type,
-        imageUrl: _imageController.text.isEmpty ? null : _imageController.text,
+        imageUrl: _uploadedImageUrl,
         vrUrl: _vrController.text.isEmpty ? null : _vrController.text,
       );
     }
@@ -1477,10 +1669,11 @@ class _PostPropertyScreenState extends State<PostPropertyScreen> {
                           },
                         ),
                         const SizedBox(height: 14),
-                        AppTextField(
-                          controller: _imageController,
-                          label: 'Liên kết hình ảnh',
-                          hint: 'https://example.com/image.jpg',
+                        _ImagePickerField(
+                          pickedImage: _pickedImage,
+                          isUploading: _isUploading,
+                          uploadProgress: _uploadProgress,
+                          onPick: _pickImage,
                         ),
                         const SizedBox(height: 14),
                         AppTextField(
@@ -1490,7 +1683,7 @@ class _PostPropertyScreenState extends State<PostPropertyScreen> {
                         ),
                         const SizedBox(height: 18),
                         FilledButton(
-                          onPressed: _createPreview,
+                          onPressed: _isUploading ? null : _createPreview,
                           style: appPrimaryButtonStyle,
                           child: const Text('Tạo bản xem trước'),
                         ),
@@ -1524,6 +1717,123 @@ class _PostPropertyScreenState extends State<PostPropertyScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// Widget chọn ảnh thay thế cho ô nhập URL.
+class _ImagePickerField extends StatelessWidget {
+  const _ImagePickerField({
+    required this.pickedImage,
+    required this.isUploading,
+    required this.uploadProgress,
+    required this.onPick,
+  });
+
+  final XFile? pickedImage;
+  final bool isUploading;
+  final double uploadProgress;
+  final VoidCallback onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Hình ảnh bất động sản',
+          style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                color: roomifyNavy,
+                fontWeight: FontWeight.w600,
+              ),
+        ),
+        const SizedBox(height: 8),
+        GestureDetector(
+          onTap: isUploading ? null : onPick,
+          child: Container(
+            height: 180,
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: roomifyMist,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: roomifyNavy.withOpacity(0.2)),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: isUploading
+                ? Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      CircularProgressIndicator(
+                        value: uploadProgress > 0 ? uploadProgress : null,
+                        color: roomifyGold,
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        uploadProgress > 0
+                            ? 'Đang tải lên... ${(uploadProgress * 100).toStringAsFixed(0)}%'
+                            : 'Đang tải lên...',
+                        style: const TextStyle(color: roomifyNavy),
+                      ),
+                    ],
+                  )
+                : pickedImage != null
+                    ? Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          // Trên web path là objectURL, trên desktop là đường dẫn file.
+                          kIsWeb
+                              ? Image.network(
+                                  pickedImage!.path,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) =>
+                                      _placeholder(context),
+                                )
+                              : Image.file(
+                                  import_io.File(pickedImage!.path),
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) =>
+                                      _placeholder(context),
+                                ),
+                          Positioned(
+                            bottom: 8,
+                            right: 8,
+                            child: _changeButton(context),
+                          ),
+                        ],
+                      )
+                    : _placeholder(context),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _placeholder(BuildContext context) {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Icon(Icons.add_photo_alternate_outlined,
+            size: 48, color: roomifyNavy.withOpacity(0.4)),
+        const SizedBox(height: 8),
+        Text(
+          'Nhấn để chọn ảnh',
+          style: TextStyle(color: roomifyNavy.withOpacity(0.5)),
+        ),
+      ],
+    );
+  }
+
+  Widget _changeButton(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black54,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: const Text(
+        'Đổi ảnh',
+        style: TextStyle(color: Colors.white, fontSize: 12),
       ),
     );
   }
@@ -2573,6 +2883,31 @@ class PropertyDetailPage extends StatelessWidget {
                     onPrimaryAction: () =>
                         Navigator.of(context).pop(DetailAction.contact),
                   ),
+                  // Nút nhắn tin cho tin đăng từ Firestore
+                  Builder(builder: (context) {
+                    final currentUid = AuthService.instance.currentUser?.uid;
+                    final ownerId = property.ownerId;
+                    if (ownerId == null || ownerId == currentUid) {
+                      return const SizedBox.shrink();
+                    }
+                    if (currentUid == null) {
+                      return const SizedBox.shrink();
+                    }
+                    final currentName =
+                        AuthService.instance.currentUser?.displayName ??
+                            AuthService.instance.currentUser?.email ??
+                            'Thành viên';
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 12),
+                      child: StartChatButton(
+                        ownerId: ownerId,
+                        ownerName: property.ownerName,
+                        propertyTitle: property.title,
+                        currentUserId: currentUid,
+                        currentUserName: currentName,
+                      ),
+                    );
+                  }),
                   const SizedBox(height: 120),
                 ],
               ),
@@ -3625,7 +3960,7 @@ class OwnerInfoCard extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           Text(
-            'Gửi yêu cầu ngay để Roomify kết nối bạn với chủ nhà hoặc người đại diện trong luồng demo hiện tại.',
+            'Gửi yêu cầu ngay để Roomify kết nối bạn với chủ nhà. Hoặc nhắn tin trực tiếp nếu bạn muốn trao đổi nhanh hơn.',
             style: Theme.of(context).textTheme.bodyMedium,
           ),
           const SizedBox(height: 16),
@@ -4333,6 +4668,7 @@ class PropertyItem {
     this.imageUrl,
     this.panoramaUrl,
     this.matterportUrl,
+    this.ownerId,
   });
 
   final int id;
@@ -4355,6 +4691,9 @@ class PropertyItem {
   final String? imageUrl;
   final String? panoramaUrl;
   final String? matterportUrl;
+
+  /// UID của chủ nhà (chỉ có ở tin đăng từ Firestore).
+  final String? ownerId;
 
   String get district => location.split(',').first.trim();
 }
