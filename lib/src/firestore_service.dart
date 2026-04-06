@@ -92,6 +92,21 @@ class FirestoreService {
     return snap.count ?? 0;
   }
 
+  /// Tìm người dùng theo số điện thoại.
+  /// Trả về map gồm `uid` + các trường hồ sơ, hoặc null nếu không tìm thấy.
+  Future<Map<String, dynamic>?> findUserByPhone(String phone) async {
+    if (!_ready) return null;
+    final normalized = phone.trim().replaceAll(RegExp(r'\s+'), '');
+    if (normalized.isEmpty) return null;
+    final snap = await _db
+        .collection('users')
+        .where('phone', isEqualTo: normalized)
+        .limit(1)
+        .get();
+    if (snap.docs.isEmpty) return null;
+    return {'uid': snap.docs.first.id, ...snap.docs.first.data()};
+  }
+
   /// Cập nhật gói thành viên của người dùng.
   Future<void> updateMembershipTier(String uid, String? tier) {
     if (!_ready) return Future.value();
@@ -163,20 +178,56 @@ class FirestoreService {
     required String type,
     String? imageUrl,
     String? vrUrl,
+    String? ownerPhone,
+    int? bedrooms,
+    String? area,
+    String? floors,
+    String? description,
   }) async {
     if (!_ready) return;
     await _db.collection('posted_properties').add({
       'userId': userId,
       'ownerName': ownerName,
+      'ownerPhone': ownerPhone?.trim() ?? '',
       'title': title.trim(),
       'price': price.trim(),
       'location': location.trim(),
       'type': type,
       'imageUrl': imageUrl?.trim(),
       'vrUrl': vrUrl?.trim(),
+      if (bedrooms != null) 'bedrooms': bedrooms,
+      if (area != null) 'area': area.trim(),
+      if (floors != null) 'floors': floors.trim(),
+      if (description != null) 'description': description.trim(),
       'status': 'pending', // pending | published | rejected
       'createdAt': FieldValue.serverTimestamp(),
     });
+  }
+
+  /// Xóa tin đăng bất động sản (chỉ xóa khi đúng chủ nhà gọi).
+  Future<void> deleteProperty(String docId) async {
+    if (!_ready) return;
+    await _db.collection('posted_properties').doc(docId).delete();
+  }
+
+  /// Stream tin đăng của một người dùng cụ thể.
+  Stream<List<Map<String, dynamic>>> getUserPostingsStream(String uid) {
+    if (!_ready) return const Stream.empty();
+    return _db
+        .collection('posted_properties')
+        .where('userId', isEqualTo: uid)
+        .snapshots()
+        .map((snap) =>
+            snap.docs.map((doc) => {'_id': doc.id, ...doc.data()}).toList()
+              ..sort((a, b) {
+                final at = a['createdAt'];
+                final bt = b['createdAt'];
+                if (at == null && bt == null) return 0;
+                if (at == null) return 1;
+                if (bt == null) return -1;
+                return (bt as dynamic).compareTo(at);
+              }))
+        .handleError((_) => <Map<String, dynamic>>[]);
   }
 
   /// Stream danh sách tin đã đăng (dùng cho Khám phá).

@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
@@ -6,172 +7,530 @@ import 'auth_service.dart';
 import 'firestore_service.dart';
 
 const Color _navy = Color(0xFF0A1931);
-const Color _gold = Color(0xFFC8A951);
 const Color _cream = Color(0xFFFAF7F2);
 
 // ── Danh sách hội thoại ────────────────────────────────────────────────────
 
-class MemberConversationsScreen extends StatelessWidget {
+class MemberConversationsScreen extends StatefulWidget {
   const MemberConversationsScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final uid = AuthService.instance.currentUser?.uid;
+  State<MemberConversationsScreen> createState() =>
+      _MemberConversationsScreenState();
+}
 
-    if (uid == null) {
-      return const _NeedLoginPlaceholder();
+class _MemberConversationsScreenState extends State<MemberConversationsScreen> {
+  final _searchCtrl = TextEditingController();
+  String _query = '';
+
+  // Phone-lookup state
+  bool _searching = false;
+  Map<String, dynamic>? _foundUser;
+  bool _notFound = false;
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  bool get _isPhoneQuery =>
+      RegExp(r'^[0-9\s\+\-]{8,15}$').hasMatch(_query.trim());
+
+  Future<void> _lookupPhone(String phone) async {
+    setState(() {
+      _searching = true;
+      _foundUser = null;
+      _notFound = false;
+    });
+    final result = await FirestoreService.instance.findUserByPhone(phone);
+    if (!mounted) return;
+    setState(() {
+      _searching = false;
+      _foundUser = result;
+      _notFound = result == null;
+    });
+  }
+
+  void _startChatWithFound(BuildContext context, String currentUid) {
+    if (_foundUser == null) return;
+    final otherUid = _foundUser!['uid'] as String;
+    final otherName =
+        (_foundUser!['name'] as String?)?.trim().isNotEmpty == true
+            ? _foundUser!['name'] as String
+            : (_foundUser!['email'] as String? ?? 'Người dùng');
+    if (otherUid == currentUid) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Đây là tài khoản của bạn.')),
+      );
+      return;
     }
-
-    return Container(
-      color: _cream,
-      child: CustomScrollView(
-        slivers: [
-          const SliverAppBar.medium(
-            pinned: true,
-            backgroundColor: Colors.transparent,
-            title: Text('Tin nhắn'),
+    final currentName = AuthService.instance.currentUser?.displayName ??
+        AuthService.instance.currentUser?.email ??
+        'Thành viên';
+    FirestoreService.instance
+        .initMemberChat(
+      uid1: currentUid,
+      name1: currentName,
+      uid2: otherUid,
+      name2: otherName,
+    )
+        .then((chatId) {
+      if (!mounted) return;
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => MemberChatScreen(
+            chatId: chatId,
+            otherUserId: otherUid,
+            otherUserName: otherName,
           ),
-          SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 100),
-            sliver: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: FirestoreService.instance.getMyConversationsStream(uid),
-              builder: (context, snap) {
-                if (snap.connectionState == ConnectionState.waiting) {
-                  return const SliverFillRemaining(
-                    child: Center(child: CircularProgressIndicator()),
-                  );
-                }
+        ),
+      );
+    });
+  }
 
-                final docs = snap.data?.docs ?? [];
-                // Sắp xếp theo lastTime giảm dần phía client.
-                final sorted = [...docs]..sort((a, b) {
-                    final ta =
-                        (a.data()['lastTime'] as Timestamp?)?.seconds ?? 0;
-                    final tb =
-                        (b.data()['lastTime'] as Timestamp?)?.seconds ?? 0;
-                    return tb.compareTo(ta);
-                  });
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<User?>(
+      stream: AuthService.instance.authStateChanges,
+      builder: (context, snapshot) {
+        // Đang chờ Firebase restore session
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+        final uid = snapshot.data?.uid;
+        if (uid == null) {
+          return const Scaffold(body: _NeedLoginPlaceholder());
+        }
+        return _buildBody(context, uid);
+      },
+    );
+  }
 
-                if (sorted.isEmpty) {
-                  return const SliverFillRemaining(
-                    child: Center(
-                      child: Padding(
-                        padding: EdgeInsets.all(32),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(CupertinoIcons.chat_bubble_2,
-                                size: 56, color: Colors.black26),
-                            SizedBox(height: 12),
-                            Text(
-                              'Chưa có tin nhắn nào.',
-                              style: TextStyle(
-                                  fontSize: 16, color: Colors.black54),
-                            ),
-                            SizedBox(height: 6),
-                            Text(
-                              'Nhấn "Nhắn tin chủ nhà" khi xem\nmột bất động sản để bắt đầu.',
-                              style: TextStyle(
-                                  fontSize: 13, color: Colors.black38),
-                              textAlign: TextAlign.center,
-                            ),
-                          ],
-                        ),
-                      ),
+  Widget _buildBody(BuildContext context, String uid) {
+    return Scaffold(
+      backgroundColor: _cream,
+      body: SafeArea(
+        child: Column(
+          children: [
+            // ── Header ────────────────────────────────────────
+            Container(
+              color: Colors.white,
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Tin nhắn',
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.w800,
+                      color: _navy,
                     ),
-                  );
-                }
-
-                return SliverList.separated(
-                  itemCount: sorted.length,
-                  separatorBuilder: (_, __) =>
-                      const Divider(height: 1, indent: 72),
-                  itemBuilder: (context, i) {
-                    final data = sorted[i].data();
-                    final chatId = sorted[i].id;
-
-                    final names = Map<String, String>.from(
-                      (data['participantNames'] as Map? ?? {})
-                          .map((k, v) => MapEntry(k.toString(), v.toString())),
-                    );
-                    final otherEntry = names.entries.firstWhere(
-                      (e) => e.key != uid,
-                      orElse: () => const MapEntry('', 'Người dùng'),
-                    );
-                    final otherUid = otherEntry.key;
-                    final otherName = otherEntry.value;
-
-                    final lastMsg = data['lastMessage'] as String? ?? '';
-                    final propertyTitle = data['propertyTitle'] as String?;
-                    final ts = data['lastTime'] as Timestamp?;
-                    final time = ts != null ? _formatTime(ts.toDate()) : '';
-
-                    return ListTile(
-                      contentPadding: const EdgeInsets.symmetric(
-                          vertical: 8, horizontal: 4),
-                      leading: CircleAvatar(
-                        radius: 26,
-                        backgroundColor: _navy,
-                        child: Text(
-                          otherName.isNotEmpty
-                              ? otherName[0].toUpperCase()
-                              : '?',
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 12),
+                  // ── Search bar ───────────────────────────────
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _searchCtrl,
+                          onChanged: (v) {
+                            setState(() {
+                              _query = v;
+                              _foundUser = null;
+                              _notFound = false;
+                            });
+                          },
+                          onSubmitted: (v) {
+                            if (_isPhoneQuery) _lookupPhone(v);
+                          },
+                          keyboardType: TextInputType.text,
+                          decoration: InputDecoration(
+                            hintText:
+                                'Tìm hội thoại hoặc nhập số điện thoại chủ nhà',
+                            hintStyle: const TextStyle(
+                                fontSize: 13, color: Colors.black38),
+                            prefixIcon: const Icon(CupertinoIcons.search,
+                                size: 18, color: Colors.black38),
+                            suffixIcon: _query.isNotEmpty
+                                ? IconButton(
+                                    icon: const Icon(
+                                        CupertinoIcons.xmark_circle_fill,
+                                        size: 18,
+                                        color: Colors.black38),
+                                    onPressed: () {
+                                      _searchCtrl.clear();
+                                      setState(() {
+                                        _query = '';
+                                        _foundUser = null;
+                                        _notFound = false;
+                                      });
+                                    },
+                                  )
+                                : null,
+                            filled: true,
+                            fillColor: const Color(0xFFF2F4F7),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(14),
+                              borderSide: BorderSide.none,
+                            ),
+                            contentPadding: const EdgeInsets.symmetric(
+                                vertical: 0, horizontal: 16),
+                          ),
                         ),
                       ),
-                      title: Text(otherName,
-                          style: const TextStyle(
-                              fontWeight: FontWeight.w600, color: _navy)),
-                      subtitle: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                      if (_isPhoneQuery) ...[
+                        const SizedBox(width: 8),
+                        FilledButton(
+                          onPressed:
+                              _searching ? null : () => _lookupPhone(_query),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: _navy,
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12)),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 14, vertical: 12),
+                          ),
+                          child: _searching
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2, color: Colors.white),
+                                )
+                              : const Text('Tìm',
+                                  style: TextStyle(fontSize: 13)),
+                        ),
+                      ],
+                    ],
+                  ),
+                  // ── Phone lookup result ───────────────────────
+                  if (_foundUser != null) ...[
+                    const SizedBox(height: 10),
+                    _PhoneResultCard(
+                      user: _foundUser!,
+                      onStartChat: () => _startChatWithFound(context, uid),
+                    ),
+                  ] else if (_notFound) ...[
+                    const SizedBox(height: 10),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                            color: Colors.orange.withValues(alpha: 0.3)),
+                      ),
+                      child: Row(
                         children: [
-                          if (propertyTitle != null)
-                            Text(
-                              'BĐS: $propertyTitle',
-                              style: const TextStyle(
-                                  fontSize: 11, color: Colors.black45),
+                          const Icon(CupertinoIcons.info_circle,
+                              size: 18, color: Colors.orange),
+                          const SizedBox(width: 8),
+                          const Expanded(
+                            child: Text(
+                              'Không tìm thấy người dùng với SĐT này. Thử liên hệ qua trang bất động sản.',
+                              style: TextStyle(
+                                  fontSize: 12, color: Colors.black54),
                             ),
-                          Text(
-                            lastMsg,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: Colors.black54),
                           ),
                         ],
                       ),
-                      trailing: Text(time,
-                          style: const TextStyle(
-                              fontSize: 12, color: Colors.black38)),
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => MemberChatScreen(
-                            chatId: chatId,
-                            otherUserId: otherUid,
-                            otherUserName: otherName,
-                            propertyTitle: propertyTitle,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            // ── Conversation list ──────────────────────────────
+            Expanded(
+              child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                stream: FirestoreService.instance.getMyConversationsStream(uid),
+                builder: (context, snap) {
+                  if (snap.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+
+                  final docs = snap.data?.docs ?? [];
+                  final sorted = [...docs]..sort((a, b) {
+                      final ta =
+                          (a.data()['lastTime'] as Timestamp?)?.seconds ?? 0;
+                      final tb =
+                          (b.data()['lastTime'] as Timestamp?)?.seconds ?? 0;
+                      return tb.compareTo(ta);
+                    });
+
+                  // Filter by search query (non-phone)
+                  final filtered = _query.isNotEmpty && !_isPhoneQuery
+                      ? sorted.where((doc) {
+                          final data = doc.data();
+                          final names =
+                              (data['participantNames'] as Map? ?? {});
+                          final other = names.entries
+                              .where((e) => e.key.toString() != uid)
+                              .map((e) => e.value.toString().toLowerCase())
+                              .join(' ');
+                          final propTitle =
+                              (data['propertyTitle'] as String? ?? '')
+                                  .toLowerCase();
+                          return other.contains(_query.toLowerCase()) ||
+                              propTitle.contains(_query.toLowerCase());
+                        }).toList()
+                      : sorted;
+
+                  if (filtered.isEmpty) {
+                    return _EmptyState(
+                      hasQuery: _query.isNotEmpty,
+                      isPhoneQuery: _isPhoneQuery,
+                    );
+                  }
+
+                  return ListView.separated(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
+                    itemCount: filtered.length,
+                    separatorBuilder: (_, __) =>
+                        const Divider(height: 1, indent: 68),
+                    itemBuilder: (context, i) {
+                      final data = filtered[i].data();
+                      final chatId = filtered[i].id;
+
+                      final names = Map<String, String>.from(
+                        (data['participantNames'] as Map? ?? {}).map(
+                          (k, v) => MapEntry(k.toString(), v.toString()),
+                        ),
+                      );
+                      final otherEntry = names.entries.firstWhere(
+                        (e) => e.key != uid,
+                        orElse: () => const MapEntry('', 'Người dùng'),
+                      );
+                      final otherUid = otherEntry.key;
+                      final otherName = otherEntry.value;
+                      final lastMsg = data['lastMessage'] as String? ?? '';
+                      final propertyTitle = data['propertyTitle'] as String?;
+                      final ts = data['lastTime'] as Timestamp?;
+                      final time = ts != null ? _formatTime(ts.toDate()) : '';
+
+                      return _ConversationTile(
+                        otherName: otherName,
+                        lastMsg: lastMsg,
+                        propertyTitle: propertyTitle,
+                        time: time,
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => MemberChatScreen(
+                              chatId: chatId,
+                              otherUserId: otherUid,
+                              otherUserName: otherName,
+                              propertyTitle: propertyTitle,
+                            ),
                           ),
                         ),
-                      ),
-                    );
-                  },
-                );
-              },
+                      );
+                    },
+                  );
+                },
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
 
   static String _formatTime(DateTime dt) {
     final diff = DateTime.now().difference(dt);
-    if (diff.inDays > 0) return '${diff.inDays}d trước';
-    if (diff.inHours > 0) return '${diff.inHours}h trước';
-    if (diff.inMinutes > 0) return '${diff.inMinutes}m trước';
-    return 'Vừa xong';
+    if (diff.inDays > 0) return '${diff.inDays}d';
+    if (diff.inHours > 0) return '${diff.inHours}h';
+    if (diff.inMinutes > 0) return '${diff.inMinutes}m';
+    return 'Vừa';
+  }
+}
+
+// ── Helper widgets ─────────────────────────────────────────────────────────
+
+class _PhoneResultCard extends StatelessWidget {
+  const _PhoneResultCard({required this.user, required this.onStartChat});
+  final Map<String, dynamic> user;
+  final VoidCallback onStartChat;
+
+  @override
+  Widget build(BuildContext context) {
+    final name = (user['name'] as String?)?.trim().isNotEmpty == true
+        ? user['name'] as String
+        : (user['email'] as String? ?? 'Người dùng');
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: _navy.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _navy.withValues(alpha: 0.15)),
+      ),
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 22,
+            backgroundColor: _navy,
+            child: Text(
+              name.isNotEmpty ? name[0].toUpperCase() : '?',
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(name,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w600, color: _navy)),
+                Text(
+                  user['phone'] as String? ?? '',
+                  style: const TextStyle(fontSize: 12, color: Colors.black45),
+                ),
+              ],
+            ),
+          ),
+          FilledButton(
+            onPressed: onStartChat,
+            style: FilledButton.styleFrom(
+              backgroundColor: _navy,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            ),
+            child: const Text('Nhắn tin', style: TextStyle(fontSize: 13)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ConversationTile extends StatelessWidget {
+  const _ConversationTile({
+    required this.otherName,
+    required this.lastMsg,
+    required this.time,
+    required this.onTap,
+    this.propertyTitle,
+  });
+
+  final String otherName;
+  final String lastMsg;
+  final String? propertyTitle;
+  final String time;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 24,
+              backgroundColor: _navy,
+              child: Text(
+                otherName.isNotEmpty ? otherName[0].toUpperCase() : '?',
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 17,
+                    fontWeight: FontWeight.bold),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(otherName,
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: _navy,
+                          fontSize: 15)),
+                  if (propertyTitle != null)
+                    Text(
+                      'BĐS: $propertyTitle',
+                      style:
+                          const TextStyle(fontSize: 11, color: Colors.black38),
+                    ),
+                  Text(
+                    lastMsg,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.black54, fontSize: 13),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(time,
+                style: const TextStyle(fontSize: 11, color: Colors.black38)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptyState extends StatelessWidget {
+  const _EmptyState({required this.hasQuery, required this.isPhoneQuery});
+  final bool hasQuery;
+  final bool isPhoneQuery;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 72,
+              height: 72,
+              decoration: BoxDecoration(
+                color: _navy.withValues(alpha: 0.07),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(CupertinoIcons.chat_bubble_2,
+                  size: 34, color: Colors.black26),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              hasQuery
+                  ? (isPhoneQuery
+                      ? 'Nhấn "Tìm" để tra cứu người dùng'
+                      : 'Không tìm thấy hội thoại phù hợp')
+                  : 'Chưa có tin nhắn nào',
+              style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black54),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              hasQuery
+                  ? (isPhoneQuery
+                      ? 'Nhập đúng số điện thoại để kết nối với chủ nhà hoặc đại lý'
+                      : 'Thử tìm kiếm với từ khoá khác')
+                  : 'Nhập số điện thoại chủ nhà để bắt đầu kết nối,\nhoặc nhắn tin từ trang bất động sản.',
+              style: const TextStyle(fontSize: 13, color: Colors.black38),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

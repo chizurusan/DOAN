@@ -10,6 +10,7 @@ import 'package:panorama/panorama.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import 'package:image_picker/image_picker.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'src/firebase_options.dart';
 import 'src/auth_service.dart';
@@ -40,7 +41,7 @@ const Color roomifyMist = Color(0xFFE9EFF7);
 const Color roomifyText = Color(0xFF13233D);
 const Color roomifyMuted = Color(0xFF68758B);
 
-enum AppTab { home, listings, connect, messages, post }
+enum AppTab { home, listings, messages, post }
 
 enum ConnectMode { book, contact }
 
@@ -335,11 +336,11 @@ class RoomifyShell extends StatefulWidget {
 
 class _RoomifyShellState extends State<RoomifyShell> {
   AppTab _currentTab = AppTab.home;
-  ConnectMode _connectMode = ConnectMode.book;
   PropertyItem _selectedProperty = mockProperties.first;
   final Set<int> _savedPropertyIds = <int>{};
   final List<PropertyItem> _firestoreProperties = [];
   StreamSubscription<List<Map<String, dynamic>>>? _postedSub;
+  Offset? _fabPosition;
 
   @override
   void initState() {
@@ -361,12 +362,24 @@ class _RoomifyShellState extends State<RoomifyShell> {
 
   PropertyItem _docToProperty(Map<String, dynamic> data) {
     final vrUrl = data['vrUrl'] as String?;
-    // Dùng URL 360 demo nếu chủ nhà chưa nhập link VR
-    final panorama = (vrUrl?.isNotEmpty == true) ? vrUrl : demoPanoramaUrl;
+    final panorama = (vrUrl?.isNotEmpty == true) ? vrUrl : null;
     // Chọn Matterport demo xoay vòng dựa theo hash của doc id
     final docId = data['_id'] as String? ?? '';
     final demoMatterport =
         matterportDemos[docId.hashCode.abs() % matterportDemos.length].url;
+    final bedroomsRaw = data['bedrooms'];
+    final bedroomsVal = (bedroomsRaw is int)
+        ? bedroomsRaw
+        : int.tryParse(bedroomsRaw?.toString() ?? '') ?? 0;
+    final areaRaw = data['area'] as String?;
+    final floorsRaw = data['floors'] as String?;
+    final descRaw = data['description'] as String?;
+
+    String areaDisplay = 'Đang cập nhật';
+    if (areaRaw != null && areaRaw.isNotEmpty) {
+      // Nếu đã có đơn vị m² thì giữ nguyên, ngược lại thêm
+      areaDisplay = areaRaw.contains('m²') ? areaRaw : '$areaRaw m²';
+    }
 
     return PropertyItem(
       id: docId.hashCode.abs(),
@@ -375,22 +388,28 @@ class _RoomifyShellState extends State<RoomifyShell> {
       type: data['type'] as String? ?? 'Căn hộ',
       price: data['price'] as String? ?? 'Thương lượng',
       numericPrice: 0,
-      bedrooms: 0,
+      bedrooms: bedroomsVal,
       bathrooms: 0,
-      area: 'Đang cập nhật',
-      description: 'Tin đăng từ chủ nhà trên Roomify.',
+      area: areaDisplay,
+      description: descRaw?.isNotEmpty == true
+          ? descRaw!
+          : 'Tin đăng từ chủ nhà trên Roomify.',
       vrCopy: vrUrl?.isNotEmpty == true
           ? 'Chủ nhà đã cung cấp link tham quan 360 riêng.'
           : 'Tour VR 360 mẫu – Chủ nhà có thể cập nhật link thực tế sau.',
-      tags: const ['Mới đăng', 'Chủ nhà'],
+      tags: [
+        'Mới đăng',
+        'Chủ nhà',
+        if (floorsRaw != null && floorsRaw.isNotEmpty) '$floorsRaw tầng',
+      ],
       featured: false,
       colors: const [Color(0xFF19365D), roomifyGold, Color(0xFFE7EEF8)],
       ownerName: data['ownerName'] as String? ?? 'Chủ nhà',
       ownerRole: 'Chủ nhà',
-      ownerPhone: '',
+      ownerPhone: data['ownerPhone'] as String? ?? '',
       imageUrl: data['imageUrl'] as String?,
       panoramaUrl: panorama,
-      matterportUrl: demoMatterport,
+      matterportUrl: (vrUrl?.isNotEmpty == true) ? demoMatterport : null,
       ownerId: data['userId'] as String?,
     );
   }
@@ -495,32 +514,17 @@ class _RoomifyShellState extends State<RoomifyShell> {
       _selectedProperty = property;
     });
 
-    final result = await Navigator.of(context).push<DetailAction>(
+    await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => PropertyDetailPage(
           property: property,
           isSaved: _savedPropertyIds.contains(property.id),
           onToggleSaved: () => _toggleSaved(property),
+          isAuthenticated: widget.isAuthenticated,
+          onOpenAuth: widget.onOpenAuth,
         ),
       ),
     );
-
-    if (!mounted || result == null) {
-      return;
-    }
-
-    if (result == DetailAction.book && !widget.isAuthenticated) {
-      final authenticated = await widget.onOpenAuth(AuthMode.login);
-      if (!mounted || !authenticated) {
-        return;
-      }
-    }
-
-    setState(() {
-      _currentTab = AppTab.connect;
-      _connectMode =
-          result == DetailAction.book ? ConnectMode.book : ConnectMode.contact;
-    });
   }
 
   void _openVr(PropertyItem property) {
@@ -529,8 +533,18 @@ class _RoomifyShellState extends State<RoomifyShell> {
     ).push(MaterialPageRoute(builder: (_) => VrTourPage(property: property)));
   }
 
+  void _showChatBotDialog(BuildContext ctx) {
+    showDialog<void>(
+      context: ctx,
+      barrierColor: Colors.transparent,
+      builder: (_) => const _DraggableChatDialog(),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final mqSize = MediaQuery.of(context).size;
+    _fabPosition ??= Offset(mqSize.width - 64, mqSize.height - 160);
     final allProperties = [...mockProperties, ..._firestoreProperties];
     final pages = <Widget>[
       HomeScreen(
@@ -550,12 +564,6 @@ class _RoomifyShellState extends State<RoomifyShell> {
         onOpenProperty: _openProperty,
         onToggleSaved: _toggleSaved,
         savedPropertyIds: _savedPropertyIds,
-      ),
-      ConnectScreen(
-        property: _selectedProperty,
-        initialMode: _connectMode,
-        isAuthenticated: widget.isAuthenticated,
-        onOpenAuth: widget.onOpenAuth,
       ),
       const MemberConversationsScreen(),
       PostPropertyScreen(
@@ -577,43 +585,41 @@ class _RoomifyShellState extends State<RoomifyShell> {
       body: Stack(
         children: [
           IndexedStack(index: _currentTab.index, children: pages),
-          // Nút Xem VR — chính giữa, sát trên thanh nav
+          // Nút Chat Bot — kéo được
           Positioned(
-            bottom: 80,
-            left: 0,
-            right: 0,
-            child: Center(
-              child: FloatingActionButton.extended(
-                heroTag: 'vr_fab',
-                onPressed: () => _openVr(_selectedProperty),
-                backgroundColor: roomifyGold,
-                foregroundColor: roomifyNavy,
-                elevation: 6,
-                icon: const Icon(CupertinoIcons.viewfinder_circle_fill),
-                label: const Text(
-                  'Xem VR',
-                  style: TextStyle(fontWeight: FontWeight.w700),
-                ),
-              ),
-            ),
-          ),
-          // Nút Chat Bot — góc phải, cùng hàng nút VR
-          Positioned(
-            right: 16,
-            bottom: 86,
-            child: FloatingActionButton(
-              heroTag: 'chatbot_fab',
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const ChatBotScreen()),
-                );
+            left: _fabPosition!.dx,
+            top: _fabPosition!.dy,
+            child: GestureDetector(
+              onPanUpdate: (details) {
+                setState(() {
+                  _fabPosition = Offset(
+                    (_fabPosition!.dx + details.delta.dx)
+                        .clamp(0.0, mqSize.width - 48),
+                    (_fabPosition!.dy + details.delta.dy)
+                        .clamp(0.0, mqSize.height - 48),
+                  );
+                });
               },
-              backgroundColor: roomifyNavy,
-              foregroundColor: roomifyGold,
-              mini: true,
-              elevation: 4,
-              tooltip: 'Chat Bot AI',
-              child: const Icon(CupertinoIcons.chat_bubble_text_fill),
+              child: FloatingActionButton(
+                heroTag: 'chatbot_fab',
+                onPressed: () {
+                  if (defaultTargetPlatform == TargetPlatform.windows ||
+                      defaultTargetPlatform == TargetPlatform.macOS ||
+                      defaultTargetPlatform == TargetPlatform.linux) {
+                    _showChatBotDialog(context);
+                  } else {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const ChatBotScreen()),
+                    );
+                  }
+                },
+                backgroundColor: roomifyNavy,
+                foregroundColor: roomifyGold,
+                mini: true,
+                elevation: 4,
+                tooltip: 'Chat Bot AI',
+                child: const Icon(CupertinoIcons.chat_bubble_text_fill),
+              ),
             ),
           ),
         ],
@@ -644,14 +650,6 @@ class _RoomifyShellState extends State<RoomifyShell> {
               color: Colors.white,
             ),
             label: 'Khám phá',
-          ),
-          NavigationDestination(
-            icon: Icon(CupertinoIcons.phone, color: Colors.white60),
-            selectedIcon: Icon(
-              CupertinoIcons.phone_fill,
-              color: Colors.white,
-            ),
-            label: 'Liên hệ',
           ),
           NavigationDestination(
             icon: Icon(CupertinoIcons.chat_bubble_2, color: Colors.white60),
@@ -1192,6 +1190,144 @@ class _ListingsScreenState extends State<ListingsScreen> {
   }
 }
 
+// ── Draggable Chat Bot Dialog (Desktop) ──────────────────────────────────────
+class _DraggableChatDialog extends StatefulWidget {
+  const _DraggableChatDialog();
+
+  @override
+  State<_DraggableChatDialog> createState() => _DraggableChatDialogState();
+}
+
+class _DraggableChatDialogState extends State<_DraggableChatDialog> {
+  Offset _position = const Offset(60, 60);
+  Size _size = const Size(420, 600);
+
+  static const _minW = 320.0;
+  static const _minH = 400.0;
+  static const _maxW = 700.0;
+  static const _maxH = 900.0;
+
+  @override
+  Widget build(BuildContext context) {
+    final screen = MediaQuery.of(context).size;
+    return Stack(
+      children: [
+        Positioned(
+          left: _position.dx.clamp(0, screen.width - _size.width),
+          top: _position.dy.clamp(0, screen.height - _size.height),
+          child: Material(
+            color: Colors.transparent,
+            child: SizedBox(
+              width: _size.width,
+              height: _size.height,
+              child: Column(
+                children: [
+                  // ── Drag handle bar ─────────────────────────────────────
+                  GestureDetector(
+                    onPanUpdate: (d) {
+                      setState(() {
+                        _position = Offset(
+                          (_position.dx + d.delta.dx)
+                              .clamp(0, screen.width - _size.width),
+                          (_position.dy + d.delta.dy)
+                              .clamp(0, screen.height - _size.height),
+                        );
+                      });
+                    },
+                    child: Container(
+                      height: 44,
+                      decoration: const BoxDecoration(
+                        color: roomifyNavy,
+                        borderRadius:
+                            BorderRadius.vertical(top: Radius.circular(16)),
+                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 28,
+                            height: 28,
+                            decoration: BoxDecoration(
+                              color: roomifyGold,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Icon(CupertinoIcons.sparkles,
+                                size: 16, color: roomifyNavy),
+                          ),
+                          const SizedBox(width: 10),
+                          const Text(
+                            'Roomify Bot',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 15,
+                            ),
+                          ),
+                          const Spacer(),
+                          const Icon(CupertinoIcons.arrow_up_down,
+                              color: Colors.white38, size: 14),
+                          const SizedBox(width: 4),
+                          const Text(
+                            'Kéo để di chuyển',
+                            style:
+                                TextStyle(color: Colors.white38, fontSize: 11),
+                          ),
+                          const SizedBox(width: 10),
+                          GestureDetector(
+                            onTap: () => Navigator.of(context).pop(),
+                            child: const Icon(CupertinoIcons.xmark_circle_fill,
+                                color: Colors.white54, size: 20),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  // ── Chat content ────────────────────────────────────────
+                  Expanded(
+                    child: ClipRRect(
+                      borderRadius: const BorderRadius.vertical(
+                          bottom: Radius.circular(16)),
+                      child: const ChatBotScreen(embedded: true),
+                    ),
+                  ),
+                  // ── Resize handle ──────────────────────────────────────
+                  GestureDetector(
+                    onPanUpdate: (d) {
+                      setState(() {
+                        _size = Size(
+                          (_size.width + d.delta.dx).clamp(_minW, _maxW),
+                          (_size.height + d.delta.dy).clamp(_minH, _maxH),
+                        );
+                      });
+                    },
+                    child: Container(
+                      height: 18,
+                      decoration: const BoxDecoration(
+                        color: roomifyNavy,
+                        borderRadius:
+                            BorderRadius.vertical(bottom: Radius.circular(16)),
+                      ),
+                      alignment: Alignment.center,
+                      child: Container(
+                        width: 32,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: Colors.white24,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class ConnectScreen extends StatefulWidget {
   const ConnectScreen({
     super.key,
@@ -1290,149 +1426,151 @@ class _ConnectScreenState extends State<ConnectScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [roomifyCream, roomifyMist],
-        ),
-      ),
-      child: CustomScrollView(
-        slivers: [
-          const NativeSliverHeader(
-            title: 'Đặt lịch và liên hệ',
-            subtitle: 'Thao tác',
+    return Scaffold(
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [roomifyCream, roomifyMist],
           ),
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 12, 20, 120),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const LabelText('Liên hệ'),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Chuyển từ quan tâm sang hành động.',
-                    style: Theme.of(context).textTheme.headlineMedium,
-                  ),
-                  const SizedBox(height: 18),
-                  SelectedPropertyCard(property: widget.property),
-                  const SizedBox(height: 14),
-                  OwnerInfoCard(
-                    property: widget.property,
-                    primaryLabel: _mode == ConnectMode.book
-                        ? 'Gửi yêu cầu xem nhà'
-                        : 'Gửi yêu cầu tư vấn',
-                    onPrimaryAction: () {
-                      _submit();
-                    },
-                  ),
-                  // Nút nhắn tin trực tiếp (chỉ hiện với tin đăng từ Firestore)
-                  Builder(builder: (context) {
-                    final ownerId = widget.property.ownerId;
-                    final currentUid = AuthService.instance.currentUser?.uid;
-                    if (!widget.isAuthenticated ||
-                        ownerId == null ||
-                        ownerId == currentUid) {
-                      return const SizedBox.shrink();
-                    }
-                    final currentName =
-                        AuthService.instance.currentUser?.displayName ??
-                            AuthService.instance.currentUser?.email ??
-                            'Thành viên';
-                    return Padding(
-                      padding: const EdgeInsets.only(top: 10),
-                      child: StartChatButton(
-                        ownerId: ownerId,
-                        ownerName: widget.property.ownerName,
-                        propertyTitle: widget.property.title,
-                        currentUserId: currentUid!,
-                        currentUserName: currentName,
-                      ),
-                    );
-                  }),
-                  const SizedBox(height: 18),
-                  SegmentedButton<ConnectMode>(
-                    showSelectedIcon: false,
-                    segments: const [
-                      ButtonSegment(
-                        value: ConnectMode.book,
-                        label: Text('Đặt lịch xem nhà'),
-                      ),
-                      ButtonSegment(
-                        value: ConnectMode.contact,
-                        label: Text('Liên hệ tư vấn'),
-                      ),
-                    ],
-                    selected: {_mode},
-                    onSelectionChanged: (selection) {
-                      setState(() {
-                        _mode = selection.first;
-                      });
-                    },
-                  ),
-                  const SizedBox(height: 18),
-                  NativeFormCard(
-                    child: Form(
-                      key: _formKey,
-                      child: Column(
-                        children: [
-                          AppTextField(
-                            controller: _nameController,
-                            label: 'Họ và tên',
-                            hint: 'Nhập họ và tên của bạn',
-                            validator: (value) =>
-                                value == null || value.trim().isEmpty
-                                    ? 'Vui lòng nhập họ và tên'
-                                    : null,
-                          ),
-                          const SizedBox(height: 14),
-                          AppTextField(
-                            controller: _phoneController,
-                            label: 'Số điện thoại',
-                            hint: 'Nhập số điện thoại',
-                            keyboardType: TextInputType.phone,
-                            validator: (value) =>
-                                value == null || value.trim().isEmpty
-                                    ? 'Vui lòng nhập số điện thoại'
-                                    : null,
-                          ),
-                          if (_mode == ConnectMode.book) ...[
+        ),
+        child: CustomScrollView(
+          slivers: [
+            const NativeSliverHeader(
+              title: 'Đặt lịch và liên hệ',
+              subtitle: 'Thao tác',
+            ),
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 12, 20, 120),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const LabelText('Liên hệ'),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Chuyển từ quan tâm sang hành động.',
+                      style: Theme.of(context).textTheme.headlineMedium,
+                    ),
+                    const SizedBox(height: 18),
+                    SelectedPropertyCard(property: widget.property),
+                    const SizedBox(height: 14),
+                    OwnerInfoCard(
+                      property: widget.property,
+                      primaryLabel: _mode == ConnectMode.book
+                          ? 'Gửi yêu cầu xem nhà'
+                          : 'Gửi yêu cầu tư vấn',
+                      onPrimaryAction: () {
+                        _submit();
+                      },
+                    ),
+                    // Nút nhắn tin trực tiếp (chỉ hiện với tin đăng từ Firestore)
+                    Builder(builder: (context) {
+                      final ownerId = widget.property.ownerId;
+                      final currentUid = AuthService.instance.currentUser?.uid;
+                      if (!widget.isAuthenticated ||
+                          ownerId == null ||
+                          ownerId == currentUid) {
+                        return const SizedBox.shrink();
+                      }
+                      final currentName =
+                          AuthService.instance.currentUser?.displayName ??
+                              AuthService.instance.currentUser?.email ??
+                              'Thành viên';
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 10),
+                        child: StartChatButton(
+                          ownerId: ownerId,
+                          ownerName: widget.property.ownerName,
+                          propertyTitle: widget.property.title,
+                          currentUserId: currentUid!,
+                          currentUserName: currentName,
+                        ),
+                      );
+                    }),
+                    const SizedBox(height: 18),
+                    SegmentedButton<ConnectMode>(
+                      showSelectedIcon: false,
+                      segments: const [
+                        ButtonSegment(
+                          value: ConnectMode.book,
+                          label: Text('Đặt lịch xem nhà'),
+                        ),
+                        ButtonSegment(
+                          value: ConnectMode.contact,
+                          label: Text('Liên hệ tư vấn'),
+                        ),
+                      ],
+                      selected: {_mode},
+                      onSelectionChanged: (selection) {
+                        setState(() {
+                          _mode = selection.first;
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 18),
+                    NativeFormCard(
+                      child: Form(
+                        key: _formKey,
+                        child: Column(
+                          children: [
+                            AppTextField(
+                              controller: _nameController,
+                              label: 'Họ và tên',
+                              hint: 'Nhập họ và tên của bạn',
+                              validator: (value) =>
+                                  value == null || value.trim().isEmpty
+                                      ? 'Vui lòng nhập họ và tên'
+                                      : null,
+                            ),
                             const SizedBox(height: 14),
                             AppTextField(
-                              controller: _scheduleController,
-                              label: 'Thời gian mong muốn',
-                              hint: 'Ví dụ: Ngày mai, 14:00',
+                              controller: _phoneController,
+                              label: 'Số điện thoại',
+                              hint: 'Nhập số điện thoại',
+                              keyboardType: TextInputType.phone,
+                              validator: (value) =>
+                                  value == null || value.trim().isEmpty
+                                      ? 'Vui lòng nhập số điện thoại'
+                                      : null,
+                            ),
+                            if (_mode == ConnectMode.book) ...[
+                              const SizedBox(height: 14),
+                              AppTextField(
+                                controller: _scheduleController,
+                                label: 'Thời gian mong muốn',
+                                hint: 'Ví dụ: Ngày mai, 14:00',
+                              ),
+                            ],
+                            const SizedBox(height: 14),
+                            AppTextField(
+                              controller: _notesController,
+                              label: 'Ghi chú',
+                              hint:
+                                  'Hỏi thêm về nội thất, tiện ích hoặc tài chính.',
+                              maxLines: 4,
+                            ),
+                            const SizedBox(height: 18),
+                            FilledButton(
+                              onPressed: _submit,
+                              style: appPrimaryButtonStyle,
+                              child: Text(
+                                _mode == ConnectMode.book
+                                    ? 'Gửi yêu cầu xem nhà'
+                                    : 'Gửi yêu cầu tư vấn',
+                              ),
                             ),
                           ],
-                          const SizedBox(height: 14),
-                          AppTextField(
-                            controller: _notesController,
-                            label: 'Ghi chú',
-                            hint:
-                                'Hỏi thêm về nội thất, tiện ích hoặc tài chính.',
-                            maxLines: 4,
-                          ),
-                          const SizedBox(height: 18),
-                          FilledButton(
-                            onPressed: _submit,
-                            style: appPrimaryButtonStyle,
-                            child: Text(
-                              _mode == ConnectMode.book
-                                  ? 'Gửi yêu cầu xem nhà'
-                                  : 'Gửi yêu cầu tư vấn',
-                            ),
-                          ),
-                        ],
+                        ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -1461,6 +1599,11 @@ class _PostPropertyScreenState extends State<PostPropertyScreen> {
   final _priceController = TextEditingController();
   final _locationController = TextEditingController();
   final _vrController = TextEditingController();
+  final _ownerPhoneController = TextEditingController();
+  final _bedroomsController = TextEditingController();
+  final _areaController = TextEditingController();
+  final _floorsController = TextEditingController();
+  final _descController = TextEditingController();
   String _type = 'Căn hộ';
   PropertyItem? _draft;
   XFile? _pickedImage;
@@ -1474,6 +1617,11 @@ class _PostPropertyScreenState extends State<PostPropertyScreen> {
     _priceController.dispose();
     _locationController.dispose();
     _vrController.dispose();
+    _ownerPhoneController.dispose();
+    _bedroomsController.dispose();
+    _areaController.dispose();
+    _floorsController.dispose();
+    _descController.dispose();
     super.dispose();
   }
 
@@ -1524,6 +1672,13 @@ class _PostPropertyScreenState extends State<PostPropertyScreen> {
         : _locationController.text;
     final price =
         _priceController.text.isEmpty ? postingPrice : _priceController.text;
+    final bedroomsVal = int.tryParse(_bedroomsController.text.trim()) ?? 0;
+    final areaVal = _areaController.text.trim().isEmpty
+        ? 'Đang cập nhật'
+        : '${_areaController.text.trim()} m²';
+    final descVal = _descController.text.trim().isEmpty
+        ? 'Bản nháp dành cho chủ nhà, sẵn sàng xuất bản với mức giá, hình ảnh và liên kết tham quan 360.'
+        : _descController.text.trim();
 
     final draft = PropertyItem(
       id: 999,
@@ -1532,11 +1687,10 @@ class _PostPropertyScreenState extends State<PostPropertyScreen> {
       type: _type,
       price: price,
       numericPrice: 0,
-      bedrooms: 3,
-      bathrooms: 2,
-      area: 'Bản xem trước',
-      description:
-          'Bản nháp dành cho chủ nhà, sẵn sàng xuất bản với mức giá, hình ảnh và liên kết tham quan 360.',
+      bedrooms: bedroomsVal,
+      bathrooms: 0,
+      area: areaVal,
+      description: descVal,
       vrCopy: _vrController.text.isEmpty
           ? 'Hãy gắn liên kết 360 để tin đăng nổi bật hơn trên Roomify.'
           : 'Bản nháp này đã có liên kết tham quan 360 để khách có thể xem nhà từ xa.',
@@ -1545,7 +1699,9 @@ class _PostPropertyScreenState extends State<PostPropertyScreen> {
       colors: const [Color(0xFF19365D), roomifyGold, Color(0xFFE7EEF8)],
       ownerName: AuthService.instance.currentUser?.displayName ?? 'Chủ nhà',
       ownerRole: 'Người đăng tin',
-      ownerPhone: '0900 000 999',
+      ownerPhone: _ownerPhoneController.text.trim().isEmpty
+          ? ''
+          : _ownerPhoneController.text.trim(),
       imageUrl: _uploadedImageUrl,
       panoramaUrl: _vrController.text.isEmpty ? null : _vrController.text,
       matterportUrl: null,
@@ -1559,6 +1715,41 @@ class _PostPropertyScreenState extends State<PostPropertyScreen> {
     // Lưu tin đăng lên Firestore nếu người dùng đã đăng nhập.
     final uid = AuthService.instance.currentUser?.uid;
     if (uid != null) {
+      // Hiển thị hộp thoại xác nhận thông tin trước khi đăng.
+      if (!mounted) return;
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Xác nhận đăng tin'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _ConfirmRow(label: 'Tiêu đề', value: title),
+              _ConfirmRow(label: 'Mức giá', value: price),
+              _ConfirmRow(label: 'Vị trí', value: location),
+              _ConfirmRow(label: 'Loại hình', value: _type),
+              const SizedBox(height: 10),
+              const Text(
+                'Tin đăng sẽ được xem xét và hiển thị trên Roomify.',
+                style: TextStyle(color: Colors.grey, fontSize: 13),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Quay lại'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: FilledButton.styleFrom(backgroundColor: roomifyNavy),
+              child: const Text('Đăng tin'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted || confirmed != true) return;
       final ownerName = AuthService.instance.currentUser?.displayName ??
           AuthService.instance.currentUser?.email ??
           'Chủ nhà';
@@ -1571,6 +1762,19 @@ class _PostPropertyScreenState extends State<PostPropertyScreen> {
         type: _type,
         imageUrl: _uploadedImageUrl,
         vrUrl: _vrController.text.isEmpty ? null : _vrController.text,
+        ownerPhone: _ownerPhoneController.text.trim().isEmpty
+            ? null
+            : _ownerPhoneController.text.trim(),
+        bedrooms: bedroomsVal > 0 ? bedroomsVal : null,
+        area: _areaController.text.trim().isEmpty
+            ? null
+            : _areaController.text.trim(),
+        floors: _floorsController.text.trim().isEmpty
+            ? null
+            : _floorsController.text.trim(),
+        description: _descController.text.trim().isEmpty
+            ? null
+            : _descController.text.trim(),
       );
     }
   }
@@ -1652,6 +1856,50 @@ class _PostPropertyScreenState extends State<PostPropertyScreen> {
                           hint: 'Quận/Huyện, Thành phố',
                         ),
                         const SizedBox(height: 14),
+                        AppTextField(
+                          controller: _ownerPhoneController,
+                          label: 'Số điện thoại chủ nhà',
+                          hint: '0901 234 567',
+                          keyboardType: TextInputType.phone,
+                        ),
+                        const SizedBox(height: 14),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: AppTextField(
+                                controller: _bedroomsController,
+                                label: 'Số phòng ngủ',
+                                hint: '3',
+                                keyboardType: TextInputType.number,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: AppTextField(
+                                controller: _floorsController,
+                                label: 'Số tầng',
+                                hint: '5',
+                                keyboardType: TextInputType.number,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        AppTextField(
+                          controller: _areaController,
+                          label: 'Diện tích (m²)',
+                          hint: '120',
+                          keyboardType: TextInputType.number,
+                        ),
+                        const SizedBox(height: 14),
+                        AppTextField(
+                          controller: _descController,
+                          label: 'Mô tả bất động sản',
+                          hint:
+                              'Mô tả chi tiết về vị trí, tiện ích, nội thất...',
+                          maxLines: 4,
+                        ),
+                        const SizedBox(height: 14),
                         AppDropdownField<String>(
                           label: 'Loại hình bất động sản',
                           value: _type,
@@ -1698,6 +1946,82 @@ class _PostPropertyScreenState extends State<PostPropertyScreen> {
                     ),
                   ),
                   const SizedBox(height: 18),
+                  // ── Banner liên hệ thiết kế VR ─────────────────────────
+                  NativeFormCard(
+                    backgroundColor: roomifyNavy,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const LabelText('Dịch vụ của Roomify',
+                            color: roomifyGold),
+                        const SizedBox(height: 10),
+                        const Text(
+                          'Thiết kế Tour VR / 360° cho BĐS của bạn',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        const Text(
+                          'Đội ngũ Roomify chụp ảnh, dựng 3D và tạo tour VR chuyên nghiệp, giúp BĐS nổi bật và thu hút khách xem nhà từ xa.',
+                          style: TextStyle(color: Colors.white70, height: 1.5),
+                        ),
+                        const SizedBox(height: 10),
+                        const Text(
+                          '📸 Gói 1: 10.000.000đ — Chụp 360° + Tour cơ bản\n'
+                          '🎯 Gói 2: 15.000.000đ — Tour VR tương tác đầy đủ\n'
+                          '⭐ Gói 3: 35.000.000đ — 3D photorealistic cao cấp',
+                          style: TextStyle(color: Colors.white, height: 1.7),
+                        ),
+                        const SizedBox(height: 14),
+                        OutlinedButton.icon(
+                          onPressed: () => showDialog(
+                            context: context,
+                            builder: (_) => AlertDialog(
+                              title: const Text('Liên hệ thiết kế VR/360°'),
+                              content: const Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                      'Đội ngũ Roomify VR sẵn sàng hỗ trợ bạn!'),
+                                  SizedBox(height: 12),
+                                  Text('📞 Hotline: 0901 234 567'),
+                                  SizedBox(height: 4),
+                                  Text('📧 Email: vr@roomify.vn'),
+                                  SizedBox(height: 4),
+                                  Text('🌐 roomify.vn/vr-design'),
+                                ],
+                              ),
+                              actions: [
+                                FilledButton(
+                                  onPressed: () => Navigator.pop(context),
+                                  style: FilledButton.styleFrom(
+                                      backgroundColor: roomifyNavy),
+                                  child: const Text('Đã hiểu'),
+                                ),
+                              ],
+                            ),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: roomifyGold,
+                            side: const BorderSide(color: roomifyGold),
+                            minimumSize: const Size.fromHeight(48),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                          ),
+                          icon: const Icon(CupertinoIcons.phone_fill),
+                          label: const Text('Liên hệ đội ngũ VR của Roomify'),
+                        ),
+                      ],
+                    ),
+                  ),
+                  // ── Tin đã đăng của người dùng ─────────────────────────
+                  const _UserPostingsSection(),
+                  const SizedBox(height: 18),
                   if (_draft == null)
                     const EmptyStateCard(
                       title: 'Bản xem trước sẽ hiển thị tại đây.',
@@ -1717,6 +2041,139 @@ class _PostPropertyScreenState extends State<PostPropertyScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// Widget hiển thị một dòng xác nhận (label: value).
+class _ConfirmRow extends StatelessWidget {
+  const _ConfirmRow({required this.label, required this.value});
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('$label: ', style: const TextStyle(fontWeight: FontWeight.w600)),
+          Expanded(
+              child: Text(value, overflow: TextOverflow.ellipsis, maxLines: 2)),
+        ],
+      ),
+    );
+  }
+}
+
+// Section hiển thị tin đã đăng của người dùng hiện tại.
+class _UserPostingsSection extends StatelessWidget {
+  const _UserPostingsSection();
+
+  @override
+  Widget build(BuildContext context) {
+    final uid = AuthService.instance.currentUser?.uid;
+    if (uid == null) return const SizedBox.shrink();
+
+    return StreamBuilder<List<Map<String, dynamic>>>(
+      stream: FirestoreService.instance.getUserPostingsStream(uid),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) return const SizedBox.shrink();
+        final listings = snapshot.data ?? [];
+        if (listings.isEmpty) return const SizedBox.shrink();
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(height: 18),
+            const LabelText('Tin đã đăng của bạn'),
+            const SizedBox(height: 10),
+            ...listings.map((listing) => _UserPostingTile(listing: listing)),
+          ],
+        );
+      },
+    );
+  }
+}
+
+// Tile một tin đăng của người dùng với nút xóa.
+class _UserPostingTile extends StatelessWidget {
+  const _UserPostingTile({required this.listing});
+  final Map<String, dynamic> listing;
+
+  @override
+  Widget build(BuildContext context) {
+    final docId = listing['_id'] as String;
+    final title = listing['title'] as String? ?? 'Không có tiêu đề';
+    final price = listing['price'] as String? ?? '';
+    final location = listing['location'] as String? ?? '';
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: roomifyNavy.withValues(alpha: 0.08)),
+        boxShadow: [
+          BoxShadow(
+            color: roomifyNavy.withValues(alpha: 0.05),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        leading: Container(
+          width: 42,
+          height: 42,
+          decoration: BoxDecoration(
+            color: roomifyGold.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: const Icon(CupertinoIcons.house_fill,
+              color: roomifyGold, size: 20),
+        ),
+        title: Text(title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontWeight: FontWeight.w600)),
+        subtitle: Text('$price • $location',
+            maxLines: 1, overflow: TextOverflow.ellipsis),
+        trailing: IconButton(
+          icon: const Icon(CupertinoIcons.delete, color: Colors.red, size: 20),
+          tooltip: 'Xóa tin đăng',
+          onPressed: () async {
+            final confirm = await showDialog<bool>(
+              context: context,
+              builder: (_) => AlertDialog(
+                title: const Text('Xóa tin đăng'),
+                content: Text(
+                    'Bạn có chắc muốn xóa tin "$title" không? Hành động này không thể hoàn tác.'),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    child: const Text('Hủy'),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(context, true),
+                    style: TextButton.styleFrom(foregroundColor: Colors.red),
+                    child: const Text('Xóa'),
+                  ),
+                ],
+              ),
+            );
+            if (confirm == true) {
+              await FirestoreService.instance.deleteProperty(docId);
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Đã xóa tin đăng.')),
+                );
+              }
+            }
+          },
+        ),
       ),
     );
   }
@@ -2666,11 +3123,15 @@ class PropertyDetailPage extends StatelessWidget {
     required this.property,
     required this.isSaved,
     required this.onToggleSaved,
+    required this.isAuthenticated,
+    required this.onOpenAuth,
   });
 
   final PropertyItem property;
   final bool isSaved;
   final VoidCallback onToggleSaved;
+  final bool isAuthenticated;
+  final AuthFlow onOpenAuth;
 
   @override
   Widget build(BuildContext context) {
@@ -2682,8 +3143,16 @@ class PropertyDetailPage extends StatelessWidget {
           children: [
             Expanded(
               child: OutlinedButton(
-                onPressed: () =>
-                    Navigator.of(context).pop(DetailAction.contact),
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => ConnectScreen(
+                      property: property,
+                      initialMode: ConnectMode.contact,
+                      isAuthenticated: isAuthenticated,
+                      onOpenAuth: onOpenAuth,
+                    ),
+                  ),
+                ),
                 style: OutlinedButton.styleFrom(
                   minimumSize: const Size.fromHeight(54),
                   side: const BorderSide(color: Color(0x1F0A1931)),
@@ -2697,7 +3166,16 @@ class PropertyDetailPage extends StatelessWidget {
             const SizedBox(width: 12),
             Expanded(
               child: FilledButton(
-                onPressed: () => Navigator.of(context).pop(DetailAction.book),
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => ConnectScreen(
+                      property: property,
+                      initialMode: ConnectMode.book,
+                      isAuthenticated: isAuthenticated,
+                      onOpenAuth: onOpenAuth,
+                    ),
+                  ),
+                ),
                 style: appPrimaryButtonStyle,
                 child: const Text('Đặt lịch xem nhà'),
               ),
@@ -2787,52 +3265,55 @@ class PropertyDetailPage extends StatelessWidget {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 18),
-                  NativeFormCard(
-                    backgroundColor: roomifyNavy,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const LabelText('Điểm nổi bật', color: roomifyGold),
-                        const SizedBox(height: 10),
-                        const Text(
-                          'Tham quan bất động sản 360/VR',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 22,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        Text(
-                          property.vrCopy,
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            height: 1.6,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        FilledButton(
-                          onPressed: () {
-                            Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => VrTourPage(property: property),
-                              ),
-                            );
-                          },
-                          style: FilledButton.styleFrom(
-                            backgroundColor: roomifyGold,
-                            foregroundColor: roomifyNavy,
-                            minimumSize: const Size.fromHeight(54),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(18),
+                  if (property.panoramaUrl != null) ...[
+                    const SizedBox(height: 18),
+                    NativeFormCard(
+                      backgroundColor: roomifyNavy,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const LabelText('Điểm nổi bật', color: roomifyGold),
+                          const SizedBox(height: 10),
+                          const Text(
+                            'Tham quan bất động sản 360/VR',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 22,
+                              fontWeight: FontWeight.w700,
                             ),
                           ),
-                          child: const Text('Mở tour 360/VR'),
-                        ),
-                      ],
+                          const SizedBox(height: 10),
+                          Text(
+                            property.vrCopy,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              height: 1.6,
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          FilledButton(
+                            onPressed: () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) =>
+                                      VrTourPage(property: property),
+                                ),
+                              );
+                            },
+                            style: FilledButton.styleFrom(
+                              backgroundColor: roomifyGold,
+                              foregroundColor: roomifyNavy,
+                              minimumSize: const Size.fromHeight(54),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(18),
+                              ),
+                            ),
+                            child: const Text('Mở tour 360/VR'),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
+                  ],
                   const SizedBox(height: 18),
                   NativeFormCard(
                     child: Row(
@@ -2880,8 +3361,16 @@ class PropertyDetailPage extends StatelessWidget {
                   OwnerInfoCard(
                     property: property,
                     primaryLabel: 'Liên hệ chủ nhà',
-                    onPrimaryAction: () =>
-                        Navigator.of(context).pop(DetailAction.contact),
+                    onPrimaryAction: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => ConnectScreen(
+                          property: property,
+                          initialMode: ConnectMode.contact,
+                          isAuthenticated: isAuthenticated,
+                          onOpenAuth: onOpenAuth,
+                        ),
+                      ),
+                    ),
                   ),
                   // Nút nhắn tin cho tin đăng từ Firestore
                   Builder(builder: (context) {
@@ -2926,6 +3415,7 @@ class VrTourPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final panoramaUrl = property.panoramaUrl;
     return Scaffold(
       backgroundColor: roomifyNavy,
       appBar: AppBar(
@@ -2934,7 +3424,7 @@ class VrTourPage extends StatelessWidget {
         title: const Text('Tour VR 360'),
       ),
       body: SafeArea(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(20),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -2943,81 +3433,70 @@ class VrTourPage extends StatelessWidget {
               const SizedBox(height: 10),
               Text(
                 'Tour 360 của ${property.title}',
-                style: Theme.of(
-                  context,
-                ).textTheme.headlineSmall?.copyWith(color: Colors.white),
+                style: Theme.of(context)
+                    .textTheme
+                    .headlineSmall
+                    ?.copyWith(color: Colors.white),
               ),
               const SizedBox(height: 10),
               Text(
                 property.vrCopy,
-                style: Theme.of(
-                  context,
-                ).textTheme.bodyLarge?.copyWith(color: Colors.white70),
+                style: Theme.of(context)
+                    .textTheme
+                    .bodyLarge
+                    ?.copyWith(color: Colors.white70),
               ),
               const SizedBox(height: 20),
-              Expanded(
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(30),
-                  child: Stack(
-                    children: [
-                      Positioned.fill(
-                        child: Panorama(
-                          animSpeed: 0.1,
-                          sensitivity: 1.3,
-                          minZoom: 1,
-                          maxZoom: 5,
-                          sensorControl: kIsWeb
-                              ? SensorControl.None
-                              : SensorControl.Orientation,
-                          child: Image.network(
-                            property.panoramaUrl ??
-                                property.imageUrl ??
-                                demoPanoramaUrl,
-                            fit: BoxFit.cover,
-                            errorBuilder: (context, error, stackTrace) {
-                              return Image.network(
-                                demoPanoramaUrl,
+              // ── 360° Panorama Viewer ──────────────────────────────
+              ClipRRect(
+                borderRadius: BorderRadius.circular(20),
+                child: SizedBox(
+                  height: 320,
+                  child: panoramaUrl != null
+                      ? Stack(
+                          children: [
+                            Panorama(
+                              animSpeed: 0.4,
+                              sensitivity: 1.8,
+                              child: Image.network(
+                                panoramaUrl,
                                 fit: BoxFit.cover,
-                              );
-                            },
-                          ),
-                        ),
-                      ),
-                      Positioned(
-                        top: 16,
-                        left: 16,
-                        right: 16,
-                        child: Row(
-                          children: const [
-                            VrOverlayChip(
-                              icon: CupertinoIcons.hand_draw,
-                              label: 'Kéo để xoay',
+                                errorBuilder: (_, __, ___) => _PanoramaError(),
+                              ),
                             ),
-                            SizedBox(width: 10),
-                            VrOverlayChip(
-                              icon:
-                                  CupertinoIcons.arrow_up_left_arrow_down_right,
-                              label: 'Chụm để zoom',
+                            // Hint kéo
+                            Positioned(
+                              bottom: 12,
+                              left: 0,
+                              right: 0,
+                              child: Center(
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 14, vertical: 7),
+                                  decoration: BoxDecoration(
+                                    color: Colors.black54,
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                  child: const Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(CupertinoIcons.hand_draw,
+                                          color: Colors.white70, size: 16),
+                                      SizedBox(width: 6),
+                                      Text(
+                                        'Kéo để xoay 360°',
+                                        style: TextStyle(
+                                            color: Colors.white70,
+                                            fontSize: 12),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
                             ),
                           ],
-                        ),
-                      ),
-                      Positioned(
-                        left: 16,
-                        right: 16,
-                        bottom: 16,
-                        child: Wrap(
-                          spacing: 10,
-                          runSpacing: 10,
-                          children: const [
-                            HotspotChip.inline(label: 'Bếp mở'),
-                            HotspotChip.inline(label: 'Khu lounge'),
-                            HotspotChip.inline(label: 'View ban công'),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
+                        )
+                      : _PanoramaError(),
                 ),
               ),
               const SizedBox(height: 18),
@@ -3025,7 +3504,7 @@ class VrTourPage extends StatelessWidget {
                 spacing: 10,
                 runSpacing: 10,
                 children: const [
-                  VrTag('Di chuyển 360'),
+                  VrTag('Kéo để xoay 360°'),
                   VrTag('Cảm nhận không gian'),
                   VrTag('Chuyển phòng/tầng'),
                   VrTag('Sẵn sàng demo'),
@@ -3056,8 +3535,71 @@ class VrTourPage extends StatelessWidget {
                   label: const Text('Mở demo Matterport'),
                 ),
               ],
-              const SizedBox(height: 18),
+              const SizedBox(height: 28),
               MatterportDemoList(currentUrl: property.matterportUrl),
+              const SizedBox(height: 28),
+              // ── Bảng giá thiết kế VR ─────────────────────────────
+              LabelText('Đặt thiết kế VR cho bất động sản', color: roomifyGold),
+              const SizedBox(height: 12),
+              Text(
+                'Nâng tầm tin đăng với tour VR chuyên nghiệp.',
+                style: Theme.of(context)
+                    .textTheme
+                    .titleMedium
+                    ?.copyWith(color: Colors.white),
+              ),
+              const SizedBox(height: 16),
+              _VrPricingCard(
+                icon: CupertinoIcons.camera_rotate,
+                title: 'Thiết kế 360 + VR',
+                price: '10.000.000đ',
+                features: const [
+                  'Chụp ảnh 360° toàn bộ không gian',
+                  'Tour VR cơ bản (xem qua trình duyệt)',
+                  'Tích hợp vào tin đăng Roomify',
+                ],
+              ),
+              const SizedBox(height: 12),
+              _VrPricingCard(
+                icon: CupertinoIcons.cube_box,
+                title: 'Thiết kế VR',
+                price: '15.000.000đ',
+                features: const [
+                  'Tour VR tương tác đầy đủ',
+                  'Hotspot điểm nổi bật từng phòng',
+                  'Tương thích kính VR & di động',
+                  'Báo cáo lượt xem hàng tháng',
+                ],
+                highlighted: true,
+              ),
+              const SizedBox(height: 12),
+              _VrPricingCard(
+                icon: CupertinoIcons.star_fill,
+                title: 'Thiết kế VR cao cấp',
+                price: '35.000.000đ',
+                features: const [
+                  'Tour VR cao cấp nhiều tầng/khu vực',
+                  'Dựng cảnh 3D nội thất photorealistic',
+                  'Âm thanh môi trường & hiệu ứng ánh sáng',
+                  'Nhà ảo tương tác (chọn nội thất trực tiếp)',
+                  'Hỗ trợ kỹ thuật 6 tháng',
+                ],
+              ),
+              const SizedBox(height: 20),
+              OutlinedButton.icon(
+                onPressed: () => Navigator.of(context).pop(),
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size.fromHeight(50),
+                  foregroundColor: Colors.white70,
+                  side: const BorderSide(color: Colors.white30),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                ),
+                icon: const Icon(CupertinoIcons.back),
+                label: const Text('Quay lại'),
+              ),
+              const SizedBox(height: 20),
             ],
           ),
         ),
@@ -3066,11 +3608,39 @@ class VrTourPage extends StatelessWidget {
   }
 }
 
-class MatterportTourPage extends StatelessWidget {
+class MatterportTourPage extends StatefulWidget {
   const MatterportTourPage({super.key, required this.title, required this.url});
 
   final String title;
   final String url;
+
+  @override
+  State<MatterportTourPage> createState() => _MatterportTourPageState();
+}
+
+class _MatterportTourPageState extends State<MatterportTourPage> {
+  bool _launching = false;
+
+  Future<void> _openInBrowser() async {
+    setState(() => _launching = true);
+    final uri = Uri.parse(widget.url);
+    try {
+      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!ok && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Không thể mở trình duyệt.')),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Không thể mở liên kết VR.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _launching = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -3079,7 +3649,7 @@ class MatterportTourPage extends StatelessWidget {
       appBar: AppBar(
         backgroundColor: roomifyNavy,
         foregroundColor: Colors.white,
-        title: Text(title),
+        title: Text(widget.title),
       ),
       body: SafeArea(
         child: Padding(
@@ -3089,27 +3659,243 @@ class MatterportTourPage extends StatelessWidget {
             children: [
               const LabelText('Matterport Demo', color: roomifyGold),
               const SizedBox(height: 8),
-              Text(
-                matterportEmbedSupported
-                    ? 'Bạn có thể dùng các điểm tương tác sẵn có của Matterport để di chuyển phòng, lên tầng và xem không gian như tour thật.'
-                    : 'Bản embed Matterport hiện hỗ trợ trên web demo. Hãy chạy bằng Chrome để dùng tương tác đầy đủ.',
-                style: Theme.of(
-                  context,
-                ).textTheme.bodyLarge?.copyWith(color: Colors.white70),
-              ),
+              if (matterportEmbedSupported) ...[
+                Text(
+                  'Dùng các điểm tương tác để di chuyển phòng, lên tầng và xem không gian như tour thật.',
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodyLarge
+                      ?.copyWith(color: Colors.white70),
+                ),
+                const SizedBox(height: 16),
+                Expanded(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(24),
+                    child: Container(
+                      color: Colors.black,
+                      child: buildMatterportEmbed(url: widget.url),
+                    ),
+                  ),
+                ),
+              ] else ...[
+                Text(
+                  'Tour VR 3D hoạt động tốt nhất trên Chrome hoặc trình duyệt của bạn.',
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodyLarge
+                      ?.copyWith(color: Colors.white70),
+                ),
+                const SizedBox(height: 20),
+                Expanded(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(24),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [
+                            const Color(0xFF1B3560),
+                            roomifyNavy,
+                          ],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                        borderRadius: BorderRadius.circular(24),
+                        border: Border.all(
+                            color: roomifyGold.withValues(alpha: 0.3),
+                            width: 1),
+                      ),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Container(
+                            width: 88,
+                            height: 88,
+                            decoration: BoxDecoration(
+                              color: roomifyGold.withValues(alpha: 0.15),
+                              shape: BoxShape.circle,
+                              border: Border.all(color: roomifyGold, width: 2),
+                            ),
+                            child: const Icon(
+                              CupertinoIcons.cube_box_fill,
+                              color: roomifyGold,
+                              size: 40,
+                            ),
+                          ),
+                          const SizedBox(height: 20),
+                          Text(
+                            'Tour VR 3D Matterport',
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleLarge
+                                ?.copyWith(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                          ),
+                          const SizedBox(height: 10),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 32),
+                            child: Text(
+                              'Nhấn bên dưới để mở tour tham quan 3D trong trình duyệt. Trải nghiệm đầy đủ bao gồm di chuyển phòng, đo không gian và xem chi tiết.',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                  color: Colors.white60, fontSize: 13),
+                            ),
+                          ),
+                          const SizedBox(height: 28),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 32),
+                            child: FilledButton.icon(
+                              onPressed: _launching ? null : _openInBrowser,
+                              style: FilledButton.styleFrom(
+                                minimumSize: const Size.fromHeight(52),
+                                backgroundColor: roomifyGold,
+                                foregroundColor: roomifyNavy,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                              ),
+                              icon: _launching
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2, color: roomifyNavy),
+                                    )
+                                  : const Icon(CupertinoIcons
+                                      .arrow_up_right_square_fill),
+                              label: Text(
+                                _launching
+                                    ? 'Đang mở...'
+                                    : 'Mở Tour VR trong trình duyệt',
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w700),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          TextButton.icon(
+                            onPressed: _launching ? null : _openInBrowser,
+                            icon: const Icon(CupertinoIcons.share,
+                                size: 16, color: Colors.white38),
+                            label: const Text(
+                              'Sao chép liên kết hoặc chia sẻ',
+                              style: TextStyle(
+                                  color: Colors.white38, fontSize: 12),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
               const SizedBox(height: 16),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: const [
+                  VrTag('Di chuyển 360°'),
+                  VrTag('Đo không gian'),
+                  VrTag('Chuyển phòng / tầng'),
+                  VrTag('Xem chi tiết nội thất'),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── VR Pricing Card ───────────────────────────────────────────────────────────
+class _VrPricingCard extends StatelessWidget {
+  const _VrPricingCard({
+    required this.icon,
+    required this.title,
+    required this.price,
+    required this.features,
+    this.highlighted = false,
+  });
+
+  final IconData icon;
+  final String title;
+  final String price;
+  final List<String> features;
+  final bool highlighted;
+
+  @override
+  Widget build(BuildContext context) {
+    final borderColor = highlighted ? roomifyGold : Colors.white24;
+    final bg = highlighted
+        ? roomifyGold.withValues(alpha: 0.12)
+        : Colors.white.withValues(alpha: 0.06);
+    return Container(
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: borderColor, width: highlighted ? 1.5 : 1),
+      ),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon,
+                  color: highlighted ? roomifyGold : Colors.white70, size: 22),
+              const SizedBox(width: 10),
               Expanded(
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(24),
-                  child: Container(
-                    color: Colors.black,
-                    child: buildMatterportEmbed(url: url),
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    color: highlighted ? roomifyGold : Colors.white,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 16,
+                  ),
+                ),
+              ),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: highlighted ? roomifyGold : Colors.white12,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  price,
+                  style: TextStyle(
+                    color: highlighted ? roomifyNavy : Colors.white,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13,
                   ),
                 ),
               ),
             ],
           ),
-        ),
+          const SizedBox(height: 12),
+          ...features.map(
+            (f) => Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(CupertinoIcons.checkmark_alt,
+                      size: 14, color: roomifyGold),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      f,
+                      style:
+                          const TextStyle(color: Colors.white70, fontSize: 13),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -4569,6 +5355,24 @@ class VrOverlayChip extends StatelessWidget {
   }
 }
 
+class _PanoramaError extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: roomifyNavy.withValues(alpha: 0.6),
+      child: const Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(CupertinoIcons.eye_slash_fill, color: Colors.white30, size: 48),
+          SizedBox(height: 12),
+          Text('Không tải được ảnh 360°',
+              style: TextStyle(color: Colors.white38)),
+        ],
+      ),
+    );
+  }
+}
+
 class VrTag extends StatelessWidget {
   const VrTag(this.label, {super.key});
 
@@ -4720,7 +5524,8 @@ const List<PropertyItem> mockProperties = [
     ownerRole: 'Chủ nhà xác thực',
     ownerPhone: '0908 221 118',
     imageUrl: 'https://picsum.photos/seed/roomify-penthouse/1200/800',
-    panoramaUrl: 'https://pannellum.org/images/alma.jpg',
+    panoramaUrl:
+        'https://dl.polyhaven.org/file/ph-assets/HDRIs/extra/Tonemapped%20JPG/cayley_interior.jpg',
     matterportUrl: 'https://my.matterport.com/show/?m=bVZzGXzms8Z',
   ),
   PropertyItem(
@@ -4744,7 +5549,8 @@ const List<PropertyItem> mockProperties = [
     ownerRole: 'Môi giới đại diện',
     ownerPhone: '0933 715 226',
     imageUrl: 'https://picsum.photos/seed/roomify-loft/1200/800',
-    panoramaUrl: 'https://pannellum.org/images/bma-1.jpg',
+    panoramaUrl:
+        'https://dl.polyhaven.org/file/ph-assets/HDRIs/extra/Tonemapped%20JPG/kiara_interior.jpg',
     matterportUrl: 'https://my.matterport.com/show/?m=doiCgKgUuRV',
   ),
   PropertyItem(
@@ -4768,7 +5574,8 @@ const List<PropertyItem> mockProperties = [
     ownerRole: 'Chủ nhà',
     ownerPhone: '0977 445 820',
     imageUrl: 'https://picsum.photos/seed/roomify-townhouse/1200/800',
-    panoramaUrl: 'https://pannellum.org/images/jfk.jpg',
+    panoramaUrl:
+        'https://dl.polyhaven.org/file/ph-assets/HDRIs/extra/Tonemapped%20JPG/lebombo.jpg',
     matterportUrl: 'https://my.matterport.com/show/?m=WMo88QtrD3A',
   ),
   PropertyItem(
@@ -4792,7 +5599,8 @@ const List<PropertyItem> mockProperties = [
     ownerRole: 'Môi giới cao cấp',
     ownerPhone: '0912 664 118',
     imageUrl: 'https://picsum.photos/seed/roomify-villa/1200/800',
-    panoramaUrl: 'https://pannellum.org/images/cerro-toco-0.jpg',
+    panoramaUrl:
+        'https://dl.polyhaven.org/file/ph-assets/HDRIs/extra/Tonemapped%20JPG/glasshouse_interior.jpg',
     matterportUrl: 'https://my.matterport.com/show/?m=rX9xYJkbR6X',
   ),
   PropertyItem(
@@ -4816,12 +5624,484 @@ const List<PropertyItem> mockProperties = [
     ownerRole: 'Chủ đầu tư thứ cấp',
     ownerPhone: '0981 202 441',
     imageUrl: 'https://picsum.photos/seed/roomify-studio/1200/800',
-    panoramaUrl: 'https://pannellum.org/images/bma-0.jpg',
+    panoramaUrl:
+        'https://dl.polyhaven.org/file/ph-assets/HDRIs/extra/Tonemapped%20JPG/lythwood_room.jpg',
     matterportUrl: 'https://my.matterport.com/show/?m=tBUbpx9R2xC',
+  ),
+
+  // ── 18 mock properties từ JSON ──────────────────────────────────
+  PropertyItem(
+    id: 6,
+    title: 'Căn hộ Lumiere Riverside',
+    location: 'Thủ Đức, TP.HCM',
+    type: 'Căn hộ',
+    price: '12 triệu/tháng',
+    numericPrice: 12000000,
+    bedrooms: 2,
+    bathrooms: 2,
+    area: '68 m²',
+    description:
+        'Căn hộ hiện đại dành cho người đi làm bận rộn, gần tuyến giao thông chính, nội thất tối giản và không gian sống thoáng.',
+    vrCopy:
+        'Khám phá không gian sống hiện đại với ban công rộng và tầm nhìn ven sông qua chế độ tour 360° sống động.',
+    tags: ['Có VR', 'Nội thất đầy đủ', 'Phù hợp thuê ở'],
+    featured: true,
+    colors: [Color(0xFF1F3D63), roomifyGold, Color(0xFF10213E)],
+    ownerName: 'Lan Phương',
+    ownerRole: 'Chủ nhà xác thực',
+    ownerPhone: '0909 123 456',
+    imageUrl:
+        'https://images.unsplash.com/photo-1560448204-e02f11c3d0e2?auto=format&fit=crop&w=1200&q=80',
+    panoramaUrl:
+        'https://dl.polyhaven.org/file/ph-assets/HDRIs/extra/Tonemapped%20JPG/cayley_interior.jpg',
+    matterportUrl: 'https://my.matterport.com/show/?m=bVZzGXzms8Z',
+  ),
+  PropertyItem(
+    id: 7,
+    title: 'Nhà phố The Urban Nest',
+    location: 'Nam Từ Liêm, Hà Nội',
+    type: 'Nhà phố',
+    price: '4,6 tỷ',
+    numericPrice: 4600000000,
+    bedrooms: 3,
+    bathrooms: 3,
+    area: '126 m²',
+    description:
+        'Nhà phố phù hợp gia đình trẻ hoặc người mua ở lâu dài, thiết kế hiện đại, nhiều ánh sáng và dễ quan sát qua tour VR.',
+    vrCopy:
+        'Trải nghiệm tour VR để thấy rõ luồng di chuyển, phòng bếp rộng và không gian gia đình trong một mạch liền lạc.',
+    tags: ['Có VR', 'Phù hợp mua ở', 'Nhà phố hiện đại'],
+    featured: true,
+    colors: [Color(0xFF26425D), Color(0xFF9FC7DB), roomifyGold],
+    ownerName: 'Tuấn Anh',
+    ownerRole: 'Môi giới đại diện',
+    ownerPhone: '0934 567 891',
+    imageUrl:
+        'https://images.unsplash.com/photo-1600585154526-990dced4db0d?auto=format&fit=crop&w=1200&q=80',
+    panoramaUrl:
+        'https://dl.polyhaven.org/file/ph-assets/HDRIs/extra/Tonemapped%20JPG/lebombo.jpg',
+    matterportUrl: 'https://my.matterport.com/show/?m=doiCgKgUuRV',
+  ),
+  PropertyItem(
+    id: 8,
+    title: 'Studio Minimal Coast',
+    location: 'Sơn Trà, Đà Nẵng',
+    type: 'Studio',
+    price: '7,5 triệu/tháng',
+    numericPrice: 7500000,
+    bedrooms: 1,
+    bathrooms: 1,
+    area: '38 m²',
+    description:
+        'Studio nhỏ gọn, tiện nghi, phù hợp người sống một mình hoặc làm việc từ xa. Thiết kế tối giản và gần biển.',
+    vrCopy:
+        'Cảm nhận không gian sống nhỏ gọn, tối giản với vị trí gần biển qua trải nghiệm VR 360° trực tuyến.',
+    tags: ['Có VR', 'Giá tốt', 'Phù hợp người độc thân'],
+    featured: false,
+    colors: [Color(0xFF183455), roomifyGold, Color(0xFFDAE6F5)],
+    ownerName: 'Khánh Linh',
+    ownerRole: 'Chủ nhà',
+    ownerPhone: '0978 234 567',
+    imageUrl:
+        'https://images.unsplash.com/photo-1502672260266-1c1ef2d93688?auto=format&fit=crop&w=1200&q=80',
+    panoramaUrl:
+        'https://dl.polyhaven.org/file/ph-assets/HDRIs/extra/Tonemapped%20JPG/lythwood_room.jpg',
+    matterportUrl: 'https://my.matterport.com/show/?m=WMo88QtrD3A',
+  ),
+  PropertyItem(
+    id: 9,
+    title: 'Căn hộ Green Living Hub',
+    location: 'Quận 7, TP.HCM',
+    type: 'Căn hộ',
+    price: '15 triệu/tháng',
+    numericPrice: 15000000,
+    bedrooms: 2,
+    bathrooms: 2,
+    area: '72 m²',
+    description:
+        'Không gian sống xanh, gần trung tâm thương mại, phù hợp với người làm văn phòng muốn tìm nơi ở tiện nghi.',
+    vrCopy:
+        'Dạo qua khu vui chơi xanh, hành lang thoáng và nội thất căn hộ qua chế độ VR trực quan trước khi tham quan thực tế.',
+    tags: ['Không gian xanh', 'Căn hộ tiện nghi', 'Gần trung tâm'],
+    featured: false,
+    colors: [Color(0xFF1F3D63), roomifyGold, Color(0xFF10213E)],
+    ownerName: 'Minh Hải',
+    ownerRole: 'Chủ đầu tư thứ cấp',
+    ownerPhone: '0912 345 678',
+    imageUrl:
+        'https://images.unsplash.com/photo-1494526585095-c41746248156?auto=format&fit=crop&w=1200&q=80',
+    panoramaUrl:
+        'https://dl.polyhaven.org/file/ph-assets/HDRIs/extra/Tonemapped%20JPG/kiara_interior.jpg',
+    matterportUrl: 'https://my.matterport.com/show/?m=rX9xYJkbR6X',
+  ),
+  PropertyItem(
+    id: 10,
+    title: 'Nhà phố Golden Lane',
+    location: 'Cầu Giấy, Hà Nội',
+    type: 'Nhà phố',
+    price: '5,8 tỷ',
+    numericPrice: 5800000000,
+    bedrooms: 4,
+    bathrooms: 3,
+    area: '140 m²',
+    description:
+        'Mặt tiền đẹp, khu dân cư đông đúc, phù hợp người mua nhà kết hợp ở và kinh doanh nhỏ.',
+    vrCopy:
+        'Tour VR giúp bạn đánh giá mặt tiền rộng và thiết kế mở bên trong trước khi đến xem thực tế.',
+    tags: ['Mua ở lâu dài', 'Vị trí đẹp', 'Mặt tiền lớn'],
+    featured: false,
+    colors: [Color(0xFF26425D), Color(0xFF9FC7DB), roomifyGold],
+    ownerName: 'Quỳnh Anh',
+    ownerRole: 'Chủ nhà xác thực',
+    ownerPhone: '0965 432 109',
+    imageUrl:
+        'https://images.unsplash.com/photo-1484154218962-a197022b5858?auto=format&fit=crop&w=1200&q=80',
+    panoramaUrl:
+        'https://dl.polyhaven.org/file/ph-assets/HDRIs/extra/Tonemapped%20JPG/glasshouse_interior.jpg',
+    matterportUrl: 'https://my.matterport.com/show/?m=tBUbpx9R2xC',
+  ),
+  PropertyItem(
+    id: 11,
+    title: 'Studio Smart Compact',
+    location: 'Bình Thạnh, TP.HCM',
+    type: 'Studio',
+    price: '6,8 triệu/tháng',
+    numericPrice: 6800000,
+    bedrooms: 1,
+    bathrooms: 1,
+    area: '32 m²',
+    description:
+        'Studio gọn gàng, phù hợp sinh hoạt cá nhân, tối ưu không gian và vị trí gần khu văn phòng.',
+    vrCopy:
+        'Xem xét tối ưu không gian sống và tất cả tiện nghi căn studio qua VR trước khi đưa ra quyết định.',
+    tags: ['Giá tốt', 'Gọn gàng', 'Ở một mình'],
+    featured: true,
+    colors: [Color(0xFF183455), roomifyGold, Color(0xFFDAE6F5)],
+    ownerName: 'Bảo Châu',
+    ownerRole: 'Môi giới đại diện',
+    ownerPhone: '0987 654 321',
+    imageUrl:
+        'https://images.unsplash.com/photo-1505693416388-ac5ce068fe85?auto=format&fit=crop&w=1200&q=80',
+    panoramaUrl:
+        'https://dl.polyhaven.org/file/ph-assets/HDRIs/extra/Tonemapped%20JPG/kiara_interior.jpg',
+    matterportUrl: 'https://my.matterport.com/show/?m=i81gEraWpeJ',
+  ),
+  PropertyItem(
+    id: 12,
+    title: 'Căn hộ Sky Garden Residence',
+    location: 'Quận 2, TP.HCM',
+    type: 'Căn hộ',
+    price: '13,5 triệu/tháng',
+    numericPrice: 13500000,
+    bedrooms: 2,
+    bathrooms: 2,
+    area: '75 m²',
+    description:
+        'Căn hộ hiện đại với không gian sáng, phù hợp cho gia đình trẻ hoặc người đi làm muốn sống gần trung tâm.',
+    vrCopy:
+        'Khám phá hồ bơi, gym và không gian căn hộ hiện đại qua tour VR360 đầy đủ trước khi liên hệ chủ nhà.',
+    tags: ['Có VR', 'View đẹp', 'Căn hộ cao cấp'],
+    featured: true,
+    colors: [Color(0xFF1F3D63), roomifyGold, Color(0xFF10213E)],
+    ownerName: 'Thanh Hằng',
+    ownerRole: 'Chủ nhà xác thực',
+    ownerPhone: '0908 765 432',
+    imageUrl:
+        'https://images.unsplash.com/photo-1724582586529-62622e50c0b3?auto=format&fit=crop&w=1200&q=80',
+    panoramaUrl:
+        'https://dl.polyhaven.org/file/ph-assets/HDRIs/extra/Tonemapped%20JPG/cayley_interior.jpg',
+    matterportUrl: 'https://my.matterport.com/show/?m=kmzrbJKkgB7',
+  ),
+  PropertyItem(
+    id: 13,
+    title: 'Nhà phố Riverside Corner',
+    location: 'Quận 9, TP.HCM',
+    type: 'Nhà phố',
+    price: '5,2 tỷ',
+    numericPrice: 5200000000,
+    bedrooms: 4,
+    bathrooms: 3,
+    area: '148 m²',
+    description:
+        'Nhà phố góc hai mặt tiền, thoáng mát, phù hợp để ở lâu dài hoặc kết hợp kinh doanh nhỏ.',
+    vrCopy:
+        'Trải nghiệm tour VR để thấy rõ hai mặt tiền và toàn bộ không gian rộng rãi của ngôi nhà phố.',
+    tags: ['Có VR', 'Nhà phố rộng', 'Hai mặt tiền'],
+    featured: false,
+    colors: [Color(0xFF26425D), Color(0xFF9FC7DB), roomifyGold],
+    ownerName: 'Văn Đức',
+    ownerRole: 'Môi giới đại diện',
+    ownerPhone: '0945 678 901',
+    imageUrl:
+        'https://images.unsplash.com/photo-1769805446592-35a4ed882bc4?auto=format&fit=crop&w=1200&q=80',
+    panoramaUrl:
+        'https://dl.polyhaven.org/file/ph-assets/HDRIs/extra/Tonemapped%20JPG/lebombo.jpg',
+    matterportUrl: 'https://my.matterport.com/show/?m=D8GJH72oZpx',
+  ),
+  PropertyItem(
+    id: 14,
+    title: 'Studio City View',
+    location: 'Ba Đình, Hà Nội',
+    type: 'Studio',
+    price: '8,2 triệu/tháng',
+    numericPrice: 8200000,
+    bedrooms: 1,
+    bathrooms: 1,
+    area: '40 m²',
+    description:
+        'Studio tối giản nhưng đầy đủ tiện nghi, phù hợp sinh viên, người độc thân hoặc người làm việc tự do.',
+    vrCopy:
+        'Cảm nhận studio tiện nghi với nội thất đầy đủ và tầm nhìn thành phố qua trải nghiệm VR 360°.',
+    tags: ['Có VR', 'Studio đẹp', 'Tiện nghi'],
+    featured: true,
+    colors: [Color(0xFF183455), roomifyGold, Color(0xFFDAE6F5)],
+    ownerName: 'Ngọc Mai',
+    ownerRole: 'Chủ nhà',
+    ownerPhone: '0976 543 210',
+    imageUrl:
+        'https://images.unsplash.com/photo-1759691555010-7f3f8674d2f2?auto=format&fit=crop&w=1200&q=80',
+    panoramaUrl:
+        'https://dl.polyhaven.org/file/ph-assets/HDRIs/extra/Tonemapped%20JPG/lythwood_room.jpg',
+    matterportUrl: 'https://my.matterport.com/show/?m=H8g1Yj1rrGW',
+  ),
+  PropertyItem(
+    id: 15,
+    title: 'Căn hộ Lotus Central',
+    location: 'Thanh Xuân, Hà Nội',
+    type: 'Căn hộ',
+    price: '14 triệu/tháng',
+    numericPrice: 14000000,
+    bedrooms: 3,
+    bathrooms: 2,
+    area: '84 m²',
+    description:
+        'Căn hộ gia đình với thiết kế ấm cúng, gần trường học, trung tâm thương mại và khu văn phòng lớn.',
+    vrCopy:
+        'Khám phá 3 phòng ngủ, không gian gia đình và các tiện ích xung quanh qua tour VR liền mạch, thuận tiện.',
+    tags: ['Có VR', 'Phù hợp gia đình', 'Gần trung tâm'],
+    featured: false,
+    colors: [Color(0xFF1F3D63), roomifyGold, Color(0xFF10213E)],
+    ownerName: 'Hùng Khoa',
+    ownerRole: 'Chủ đầu tư thứ cấp',
+    ownerPhone: '0933 456 789',
+    imageUrl:
+        'https://images.unsplash.com/photo-1738168269267-241954441823?auto=format&fit=crop&w=1200&q=80',
+    panoramaUrl:
+        'https://dl.polyhaven.org/file/ph-assets/HDRIs/extra/Tonemapped%20JPG/kiara_interior.jpg',
+    matterportUrl: 'https://my.matterport.com/show/?m=NChqGkBbeVo',
+  ),
+  PropertyItem(
+    id: 16,
+    title: 'Nhà phố Maple Home',
+    location: 'Hải Châu, Đà Nẵng',
+    type: 'Nhà phố',
+    price: '4,2 tỷ',
+    numericPrice: 4200000000,
+    bedrooms: 3,
+    bathrooms: 3,
+    area: '132 m²',
+    description:
+        'Nhà phố phong cách hiện đại, phù hợp gia đình cần không gian sống rộng rãi gần trung tâm thành phố.',
+    vrCopy:
+        'Dạo qua sân trước, phòng khách và các phòng của ngôi nhà phố hiện đại qua chế độ tour 360°.',
+    tags: ['Có VR', 'Nhà phố đẹp', 'Ở lâu dài'],
+    featured: true,
+    colors: [Color(0xFF26425D), Color(0xFF9FC7DB), roomifyGold],
+    ownerName: 'Thu Phương',
+    ownerRole: 'Chủ nhà xác thực',
+    ownerPhone: '0901 234 567',
+    imageUrl:
+        'https://images.unsplash.com/photo-1605276374104-dee2a0ed3cd6?auto=format&fit=crop&w=1200&q=80',
+    panoramaUrl:
+        'https://dl.polyhaven.org/file/ph-assets/HDRIs/extra/Tonemapped%20JPG/glasshouse_interior.jpg',
+    matterportUrl: 'https://my.matterport.com/show/?m=VsxrdxtQPjo',
+  ),
+  PropertyItem(
+    id: 17,
+    title: 'Studio Ocean Breeze',
+    location: 'Ngũ Hành Sơn, Đà Nẵng',
+    type: 'Studio',
+    price: '7,9 triệu/tháng',
+    numericPrice: 7900000,
+    bedrooms: 1,
+    bathrooms: 1,
+    area: '36 m²',
+    description:
+        'Studio gần biển, phong cách trẻ trung, thích hợp cho người độc thân hoặc các bạn làm việc từ xa.',
+    vrCopy:
+        'Cảm nhận studio trẻ trung gần biển với ban công nhỏ và nội thất mới qua trải nghiệm VR 360° đầy đủ.',
+    tags: ['Có VR', 'Gần biển', 'Studio trẻ trung'],
+    featured: false,
+    colors: [Color(0xFF183455), roomifyGold, Color(0xFFDAE6F5)],
+    ownerName: 'Thảo Vy',
+    ownerRole: 'Chủ nhà',
+    ownerPhone: '0977 890 123',
+    imageUrl:
+        'https://images.unsplash.com/photo-1749878064335-117141e3a1aa?auto=format&fit=crop&w=1200&q=80',
+    panoramaUrl:
+        'https://dl.polyhaven.org/file/ph-assets/HDRIs/extra/Tonemapped%20JPG/kiara_interior.jpg',
+    matterportUrl: 'https://my.matterport.com/show/?m=7Sa4qvF9qxz',
+  ),
+  PropertyItem(
+    id: 18,
+    title: 'Căn hộ Sunrise Premium',
+    location: 'Quận 4, TP.HCM',
+    type: 'Căn hộ',
+    price: '16 triệu/tháng',
+    numericPrice: 16000000,
+    bedrooms: 2,
+    bathrooms: 2,
+    area: '78 m²',
+    description:
+        'Căn hộ cao cấp với thiết kế sang trọng, phù hợp cho người thuê cần không gian sống tiện nghi gần trung tâm.',
+    vrCopy:
+        'Tour VR giúp bạn trải nghiệm view sông, hồ bơi tràn và nội thất cao cấp trước khi liên hệ tư vấn viên.',
+    tags: ['Có VR', 'Cao cấp', 'View đẹp'],
+    featured: true,
+    colors: [Color(0xFF1F3D63), roomifyGold, Color(0xFF10213E)],
+    ownerName: 'Đức Minh',
+    ownerRole: 'Môi giới cao cấp',
+    ownerPhone: '0911 222 333',
+    imageUrl:
+        'https://images.unsplash.com/photo-1669317139155-912572c38362?auto=format&fit=crop&w=1200&q=80',
+    panoramaUrl:
+        'https://dl.polyhaven.org/file/ph-assets/HDRIs/extra/Tonemapped%20JPG/cayley_interior.jpg',
+    matterportUrl: 'https://my.matterport.com/show/?m=aNiCYQR1oh4',
+  ),
+  PropertyItem(
+    id: 19,
+    title: 'Nhà phố Heritage Square',
+    location: 'Hoàng Mai, Hà Nội',
+    type: 'Nhà phố',
+    price: '6,3 tỷ',
+    numericPrice: 6300000000,
+    bedrooms: 5,
+    bathrooms: 4,
+    area: '165 m²',
+    description:
+        'Nhà phố rộng rãi, thiết kế sang trọng, phù hợp gia đình đông người hoặc đầu tư giữ tài sản lâu dài.',
+    vrCopy:
+        'Dạo qua 5 phòng ngủ, gara riêng và không gian sang trọng của nhà phố qua chế độ tour 360° toàn cảnh.',
+    tags: ['Có VR', 'Rộng rãi', 'Nhà phố cao cấp'],
+    featured: true,
+    colors: [Color(0xFF26425D), Color(0xFF9FC7DB), roomifyGold],
+    ownerName: 'Kim Ngân',
+    ownerRole: 'Chủ nhà xác thực',
+    ownerPhone: '0956 789 012',
+    imageUrl:
+        'https://images.unsplash.com/photo-1748063578185-3d68121b11ff?auto=format&fit=crop&w=1200&q=80',
+    panoramaUrl:
+        'https://dl.polyhaven.org/file/ph-assets/HDRIs/extra/Tonemapped%20JPG/lebombo.jpg',
+    matterportUrl: 'https://my.matterport.com/show/?m=LhbwwoBWJ8x',
+  ),
+  PropertyItem(
+    id: 20,
+    title: 'Căn hộ Imperial River View',
+    location: 'Vỹ Dạ, Huế',
+    type: 'Căn hộ',
+    price: '11 triệu/tháng',
+    numericPrice: 11000000,
+    bedrooms: 2,
+    bathrooms: 2,
+    area: '67 m²',
+    description:
+        'Căn hộ hiện đại gần sông, không gian sáng và yên tĩnh, phù hợp cho gia đình nhỏ hoặc người đi làm cần nơi ở tiện nghi.',
+    vrCopy:
+        'Khám phá căn hộ view sông yên tĩnh với ban công rộng và ánh sáng tự nhiên qua trải nghiệm tour 360° sống động.',
+    tags: ['Có VR', 'View đẹp', 'Căn hộ tiện nghi'],
+    featured: true,
+    colors: [Color(0xFF1F3D63), roomifyGold, Color(0xFF10213E)],
+    ownerName: 'Xuân Hà',
+    ownerRole: 'Chủ nhà',
+    ownerPhone: '0944 321 098',
+    imageUrl:
+        'https://images.unsplash.com/photo-1499955085172-a104c9463ece?auto=format&fit=crop&w=1200&q=80',
+    panoramaUrl:
+        'https://dl.polyhaven.org/file/ph-assets/HDRIs/extra/Tonemapped%20JPG/lythwood_room.jpg',
+    matterportUrl: 'https://my.matterport.com/show/?m=vkRHUcj3Gte',
+  ),
+  PropertyItem(
+    id: 21,
+    title: 'Nhà phố Cố Đô Residence',
+    location: 'An Cựu, Huế',
+    type: 'Nhà phố',
+    price: '4,3 tỷ',
+    numericPrice: 4300000000,
+    bedrooms: 3,
+    bathrooms: 3,
+    area: '128 m²',
+    description:
+        'Nhà phố thiết kế hiện đại, khu dân cư yên tĩnh, phù hợp gia đình muốn ở lâu dài tại khu vực trung tâm Huế.',
+    vrCopy:
+        'Tour VR giúp bạn thấy rõ phòng khách lớn và không gian sống yên tĩnh tại khu vực trung tâm thành phố Huế.',
+    tags: ['Có VR', 'Nhà phố đẹp', 'Ở lâu dài'],
+    featured: false,
+    colors: [Color(0xFF26425D), Color(0xFF9FC7DB), roomifyGold],
+    ownerName: 'Bích Trâm',
+    ownerRole: 'Môi giới đại diện',
+    ownerPhone: '0966 543 210',
+    imageUrl:
+        'https://images.unsplash.com/photo-1706164971309-fb4785fe6ceb?auto=format&fit=crop&w=1200&q=80',
+    panoramaUrl:
+        'https://dl.polyhaven.org/file/ph-assets/HDRIs/extra/Tonemapped%20JPG/glasshouse_interior.jpg',
+    matterportUrl: 'https://my.matterport.com/show/?m=GyWHbeV3thf',
+  ),
+  PropertyItem(
+    id: 22,
+    title: 'Studio Huế Minimal',
+    location: 'Thuận Hòa, Huế',
+    type: 'Studio',
+    price: '6,9 triệu/tháng',
+    numericPrice: 6900000,
+    bedrooms: 1,
+    bathrooms: 1,
+    area: '34 m²',
+    description:
+        'Studio nhỏ gọn, tối ưu không gian, phù hợp sinh viên, người độc thân hoặc người làm việc từ xa.',
+    vrCopy:
+        'Xem xét toàn bộ không gian sống thông minh, tối ưu của studio qua trải nghiệm VR 360° trực quan.',
+    tags: ['Có VR', 'Giá tốt', 'Studio đẹp'],
+    featured: true,
+    colors: [Color(0xFF183455), roomifyGold, Color(0xFFDAE6F5)],
+    ownerName: 'Quang Hiếu',
+    ownerRole: 'Chủ nhà',
+    ownerPhone: '0989 123 456',
+    imageUrl:
+        'https://images.unsplash.com/photo-1748679767437-00b5c0327b1a?auto=format&fit=crop&w=1200&q=80',
+    panoramaUrl:
+        'https://dl.polyhaven.org/file/ph-assets/HDRIs/extra/Tonemapped%20JPG/lythwood_room.jpg',
+    matterportUrl: 'https://my.matterport.com/show/?m=4vuk5Fufe9p',
+  ),
+  PropertyItem(
+    id: 23,
+    title: 'Căn hộ Perfume River Home',
+    location: 'Phú Hội, Huế',
+    type: 'Căn hộ',
+    price: '13 triệu/tháng',
+    numericPrice: 13000000,
+    bedrooms: 2,
+    bathrooms: 2,
+    area: '74 m²',
+    description:
+        'Căn hộ phù hợp gia đình trẻ, thiết kế ấm cúng, gần khu trung tâm và thuận tiện di chuyển trong thành phố.',
+    vrCopy:
+        'Khám phá căn hộ ấm cúng gần sông Hương với 2 phòng ngủ và đầy đủ tiện nghi qua tour VR 360° liền mạch.',
+    tags: ['Có VR', 'Phù hợp gia đình', 'Tiện nghi'],
+    featured: false,
+    colors: [Color(0xFF1F3D63), roomifyGold, Color(0xFF10213E)],
+    ownerName: 'Diệu Linh',
+    ownerRole: 'Chủ nhà xác thực',
+    ownerPhone: '0922 345 678',
+    imageUrl:
+        'https://images.unsplash.com/photo-1560185009-5bf9f2849488?auto=format&fit=crop&w=1200&q=80',
+    panoramaUrl:
+        'https://dl.polyhaven.org/file/ph-assets/HDRIs/extra/Tonemapped%20JPG/cayley_interior.jpg',
+    matterportUrl: 'https://my.matterport.com/show/?m=oBTCWr5UnbE',
   ),
 ];
 
-const String demoPanoramaUrl = 'https://pannellum.org/images/alma.jpg';
+const String demoPanoramaUrl =
+    'https://dl.polyhaven.org/file/ph-assets/HDRIs/extra/Tonemapped%20JPG/lebombo.jpg';
 
 class MatterportDemo {
   const MatterportDemo({

@@ -45,97 +45,285 @@ class _BotEngine {
   static String reply(String userText) {
     final text = userText.toLowerCase().trim();
 
-    if (_match(text, ['xin chào', 'hello', 'hi', 'chào', 'hey'])) {
-      return 'Xin chào! Tôi là Roomify Bot 🏠 Tôi có thể giúp bạn tìm phòng, '
-          'giải đáp thắc mắc về giá thuê, khu vực, hoặc các tiện ích nhà trọ. '
+    // ── Chào hỏi ──────────────────────────────────────────────────────────
+    if (_match(
+            text, ['xin chào', 'hello', 'hi ', 'chào', 'hey', 'alo', 'ơi']) &&
+        !_match(text, [
+          'giá',
+          'bao nhiêu',
+          'như thế nào',
+          'cách',
+          'thiết kế',
+          'đăng',
+          'vr',
+          'nhà'
+        ])) {
+      return 'Xin chào! Tôi là Roomify Bot 🏠\n\n'
+          'Tôi có thể giúp bạn:\n'
+          '🔍 Tìm BĐS theo giá & khu vực\n'
+          '📅 Đặt lịch xem nhà\n'
+          '📝 Đăng tin bán/cho thuê\n'
+          '🥽 Thiết kế tour VR cho chủ nhà\n'
+          '💬 Nhắn tin trực tiếp chủ nhà\n\n'
           'Bạn cần hỗ trợ gì?';
     }
-    if (_match(text, ['giá', 'bao nhiêu tiền', 'chi phí', 'giá thuê'])) {
-      return 'Giá thuê tại Roomify dao động từ 2–15 triệu/tháng tùy khu vực '
-          'và diện tích 🏷️\n\n'
-          '• Phòng trọ đơn: 2–4 triệu/tháng\n'
-          '• Căn hộ mini: 4–8 triệu/tháng\n'
-          '• Căn hộ 1PN: 7–15 triệu/tháng\n\n'
-          'Bạn có ngân sách cụ thể không? Tôi sẽ lọc phòng phù hợp cho bạn!';
+
+    // ── Giá thiết kế VR ──────────────────────────────────────────────────
+    if (_match(text, [
+      'giá vr',
+      'thiết kế vr',
+      'giá thiết kế',
+      'dịch vụ vr',
+      'matterport',
+      'tour 360',
+      'thiết kế 360',
+      'làm vr',
+      'vr giá',
+      'bao nhiêu vr',
+      'phí vr',
+      'gói vr',
+      'dịch vụ thiết kế',
+      'chi phí vr',
+      'vr bao nhiêu',
+      'vr 360',
+      'tạo vr',
+      'làm tour',
+      'giá tour',
+    ])) {
+      return '🥽 Roomify cung cấp 3 gói thiết kế VR:\n\n'
+          '📸 Gói 1 — 10.000.000đ\n'
+          '   Chụp 360°, tour VR cơ bản, tích hợp tin đăng\n\n'
+          '🎯 Gói 2 — 15.000.000đ\n'
+          '   Tour tương tác, hotspot từng phòng, kính VR, báo cáo lượt xem\n\n'
+          '⭐ Gói 3 — 35.000.000đ\n'
+          '   3D photorealistic, nhà ảo tương tác, hỗ trợ kỹ thuật 6 tháng\n\n'
+          'Bạn muốn tư vấn chi tiết gói nào?';
     }
+
+    // ── VR tính năng chung ────────────────────────────────────────────────
+    if (_match(text,
+        ['vr', 'tour ảo', 'thực tế ảo', 'panorama', '360 độ', 'xem 3d'])) {
+      return 'Roomify tích hợp 2 loại trải nghiệm ảo 🥽\n\n'
+          '• Tour VR 360°: Xem trực tiếp trong ứng dụng\n'
+          '• Tour Matterport 3D: Xem chi tiết trong trình duyệt\n\n'
+          'Chủ nhà muốn có tour VR riêng? Roomify thiết kế từ 10 triệu đồng.\n'
+          'Hỏi "giá thiết kế VR" để xem 3 gói dịch vụ chi tiết!';
+    }
+
+    // ── Đăng tin / Gói thành viên ─────────────────────────────────────────
+    if (_match(text, [
+      'đăng tin',
+      'đăng bài',
+      'đăng bán',
+      'đăng cho thuê',
+      'tạo tin',
+      'thành viên',
+      'membership',
+      'vip',
+      'gói thành viên',
+      'gói đăng',
+      'đăng nhà',
+      'bán nhà như thế nào',
+      'cho thuê nhà như thế nào',
+      'đăng ký bán',
+    ])) {
+      return '📝 Đăng tin bán/cho thuê tại tab "Đăng tin"\n\n'
+          'Thông tin cần điền:\n'
+          '• Tiêu đề, mô tả, loại BĐS\n'
+          '• Vị trí, giá, diện tích, số tầng, số phòng ngủ\n'
+          '• SĐT liên hệ, ảnh, link VR 360 (nếu có)\n\n'
+          'Gói thành viên:\n'
+          '• 1 tháng: 300.000đ\n'
+          '• 3 tháng: 700.000đ (tiết kiệm 200.000đ)\n'
+          '• 1 năm: 2.100.000đ (tối ưu nhất)\n'
+          '• Lẻ từng bài: 50.000đ/bài';
+    }
+
+    // ── Đặt lịch ──────────────────────────────────────────────────────────
+    if (_match(text, [
+      'đặt lịch',
+      'hẹn xem',
+      'xem nhà',
+      'xem phòng',
+      'đặt hẹn',
+      'cách xem nhà',
+      'muốn xem',
+      'đến xem',
+    ])) {
+      return '📅 Quy trình đặt lịch xem nhà:\n\n'
+          '1. Vào chi tiết BĐS muốn xem\n'
+          '2. Nhấn "Đặt lịch xem nhà" hoặc "Liên hệ tư vấn"\n'
+          '3. Điền họ tên, SĐT, thời gian mong muốn\n'
+          '4. Roomify kết nối với chủ nhà & xác nhận lịch\n\n'
+          '💡 Ngoài ra có thể nhắn tin trực tiếp với chủ nhà qua tab "Tin nhắn"!';
+    }
+
+    // ── Nhắn tin chủ nhà ──────────────────────────────────────────────────
+    if (_match(text, [
+      'nhắn tin',
+      'chat với',
+      'liên lạc',
+      'tin nhắn',
+      'kết nối chủ',
+      'liên hệ chủ',
+      'tìm chủ nhà',
+      'nhắn với chủ',
+    ])) {
+      return '💬 Nhắn tin với chủ nhà qua 2 cách:\n\n'
+          '① Tab "Tin nhắn" → tìm theo tên hoặc SĐT\n'
+          '② Vào chi tiết BĐS → nhấn "Nhắn tin với chủ nhà"\n\n'
+          'Cần đăng nhập để sử dụng tính năng này!';
+    }
+
+    // ── Giá mua/thuê BĐS ─────────────────────────────────────────────────
+    if (_match(text, [
+      'giá nhà',
+      'giá mua',
+      'giá bán',
+      'giá thuê',
+      'giá căn hộ',
+      'giá chung cư',
+      'bao nhiêu tiền',
+      'chi phí mua',
+      'mua nhà bao nhiêu',
+      'thuê nhà bao nhiêu',
+      'giá bất động sản',
+      'tầm giá',
+    ])) {
+      return '🏷️ Giá BĐS tham khảo trên Roomify:\n\n'
+          'Mua bán:\n'
+          '• Căn hộ chung cư: 1–10 tỷ đồng\n'
+          '• Nhà phố / Biệt thự: 3–50+ tỷ đồng\n\n'
+          'Cho thuê:\n'
+          '• Studio/mini: 4–8 triệu/tháng\n'
+          '• Căn hộ 1–2 phòng ngủ: 8–20 triệu/tháng\n'
+          '• Nhà phố: 15–50 triệu/tháng\n\n'
+          'Bạn có ngân sách cụ thể không? Tôi tư vấn thêm!';
+    }
+
+    // ── Khu vực ──────────────────────────────────────────────────────────
     if (_match(text, [
       'khu vực',
       'địa điểm',
       'quận',
-      'thành phố',
       'hồ chí minh',
       'hà nội',
       'đà nẵng',
+      'tp.hcm',
+      'tp hcm',
+      'hcm',
+      'bình dương',
+      'thủ đức',
+      'bình thạnh',
+      'sài gòn',
+      'hoạt động ở đâu',
+      'có ở đâu',
     ])) {
-      return 'Roomify hiện có tin đăng tại nhiều khu vực 📍\n\n'
-          '• TP. Hồ Chí Minh: Q1, Q3, Q7, Bình Thạnh, Thủ Đức…\n'
-          '• Hà Nội: Đống Đa, Ba Đình, Cầu Giấy…\n'
-          '• Đà Nẵng: Hải Châu, Sơn Trà…\n\n'
-          'Bạn muốn tìm phòng ở khu vực nào?';
+      return '📍 Khu vực Roomify đang hoạt động:\n\n'
+          'TP. Hồ Chí Minh:\n'
+          '  Quận 1, 2, 3, 7, Bình Thạnh, Thủ Đức, Bình Dương\n\n'
+          'Hà Nội:\n'
+          '  Đống Đa, Ba Đình, Cầu Giấy, Nam Từ Liêm, Tây Hồ\n\n'
+          'Đà Nẵng:\n'
+          '  Hải Châu, Sơn Trà, Ngũ Hành Sơn\n\n'
+          'Bạn muốn tìm BĐS khu vực nào?';
     }
-    if (_match(text, ['tiện ích', 'wifi', 'điều hòa', 'nội thất', 'gồm gì'])) {
-      return 'Các phòng được đăng trên Roomify thường có thông tin tiện ích '
-          'đầy đủ 📋\n\n'
-          '• WiFi tốc độ cao\n'
-          '• Điều hòa / Máy lạnh\n'
-          '• Nội thất cơ bản hoặc đầy đủ\n'
-          '• Bãi đỗ xe, chỗ để đồ\n\n'
-          'Bạn muốn lọc phòng theo tiện ích cụ thể nào?';
+
+    // ── Loại BĐS ─────────────────────────────────────────────────────────
+    if (_match(text, [
+      'loại nhà',
+      'loại bđs',
+      'căn hộ',
+      'biệt thự',
+      'nhà phố',
+      'penthouse',
+      'chung cư',
+      'đất nền',
+      'studio',
+      'có loại nào',
+      'các loại',
+    ])) {
+      return '🏢 Các loại BĐS trên Roomify:\n\n'
+          '• Căn hộ chung cư (studio, 1PN, 2PN, 3PN)\n'
+          '• Căn hộ penthouse\n'
+          '• Nhà phố / Nhà liên kế\n'
+          '• Biệt thự\n'
+          '• Đất nền / Đất dự án\n\n'
+          'Bạn đang tìm loại nào?';
     }
-    if (_match(text, ['đặt phòng', 'đặt lịch', 'xem phòng', 'liên hệ chủ'])) {
-      return 'Để đặt lịch xem phòng, bạn chọn tab **Liên hệ** ở menu dưới 📅\n\n'
-          'Hoặc vào chi tiết bất động sản → nhấn nút **Đặt lịch xem** — '
-          'chúng tôi sẽ kết nối bạn với chủ nhà ngay!';
+
+    // ── Đăng nhập / Tài khoản ────────────────────────────────────────────
+    if (_match(text, [
+      'đăng ký',
+      'đăng nhập',
+      'tài khoản',
+      'login',
+      'register',
+      'tạo tài khoản',
+      'quên mật khẩu',
+      'tạo account',
+    ])) {
+      return '👤 Roomify hỗ trợ đăng ký & đăng nhập bằng Email.\n\n'
+          'Sau khi đăng nhập:\n'
+          '❤️ Lưu BĐS yêu thích\n'
+          '📅 Đặt lịch xem nhà\n'
+          '💬 Nhắn tin với chủ nhà\n'
+          '📝 Đăng tin bán/cho thuê\n\n'
+          'Nhấn biểu tượng avatar góc phải màn hình chính để đăng nhập!';
     }
-    if (_match(text, ['đăng tin', 'đăng bài', 'cho thuê', 'post'])) {
-      return 'Để đăng tin cho thuê phòng, bạn vào tab **Đăng tin** 📝\n\n'
-          'Gói đăng tin:\n'
-          '• Gói tháng: 300.000đ\n'
-          '• Gói 3 tháng: 700.000đ\n'
-          '• Gói 1 năm: 2.100.000đ\n\n'
-          'Cần hỗ trợ thêm về quy trình đăng tin không?';
+
+    // ── Lưu yêu thích ────────────────────────────────────────────────────
+    if (_match(text, ['lưu', 'yêu thích', 'bookmark', '❤️', 'tim', 'save'])) {
+      return '❤️ Nhấn biểu tượng tim trên thẻ BĐS để lưu vào danh sách yêu thích.\n\n'
+          'Danh sách yêu thích đồng bộ theo tài khoản, xem lại bất cứ lúc nào trong hồ sơ cá nhân!';
     }
-    if (_match(text, ['vr', 'tour', '3d', 'xem thực tế', 'panorama'])) {
-      return 'Roomify hỗ trợ tour VR 360° để bạn xem phòng mà không cần đến '
-          'trực tiếp 🥽\n\n'
-          'Nhấn nút **Xem VR** (màu vàng ở dưới) để trải nghiệm căn phòng '
-          'theo dạng toàn cảnh 360 độ!';
+
+    // ── Cảm ơn / Phản hồi ────────────────────────────────────────────────
+    if (_match(text, [
+      'cảm ơn',
+      'thanks',
+      'thank',
+      'tuyệt',
+      'hay quá',
+      'ok',
+      'được rồi',
+      'hiểu rồi',
+      'rõ rồi'
+    ])) {
+      return 'Vui lòng được hỗ trợ bạn! 😊\nCòn câu hỏi nào về Roomify, cứ hỏi nhé!';
     }
-    if (_match(text, ['thành viên', 'membership', 'vip', 'gói'])) {
-      return 'Gói thành viên Roomify cho phép bạn đăng tin không giới hạn 🌟\n\n'
-          '• Gói tháng: 300.000đ/tháng\n'
-          '• Gói 3 tháng: 700.000đ — tiết kiệm hơn\n'
-          '• Gói 1 năm: 2.100.000đ — tối ưu nhất\n\n'
-          'Đăng ký tại tab **Đăng tin** trong ứng dụng nhé!';
+    if (_match(text, ['tạm biệt', 'bye', 'goodbye', 'thôi nhé', 'hẹn gặp'])) {
+      return 'Tạm biệt! Chúc bạn tìm được BĐS ưng ý trên Roomify! 🏡';
     }
-    if (_match(text, ['cảm ơn', 'thanks', 'thank', 'ok', 'được rồi'])) {
-      return 'Rất vui được hỗ trợ bạn! 😊 Nếu còn câu hỏi nào về phòng trọ '
-          'hay dịch vụ Roomify, đừng ngần ngại hỏi tôi nhé!';
-    }
-    if (_match(text, ['tạm biệt', 'bye', 'goodbye'])) {
-      return 'Tạm biệt! Chúc bạn tìm được căn phòng ưng ý! 🏡 '
-          'Hẹn gặp lại trên Roomify!';
-    }
-    if (_match(text, ['hỗ trợ', 'trợ giúp', 'help', 'hướng dẫn'])) {
-      return 'Tôi có thể giúp bạn về:\n\n'
-          '🔍 Tìm phòng theo giá & khu vực\n'
-          '📅 Đặt lịch xem phòng\n'
-          '📝 Hướng dẫn đăng tin\n'
-          '🥽 Tour VR 360°\n'
-          '🌟 Gói thành viên\n\n'
+
+    // ── Hỗ trợ tổng quát ────────────────────────────────────────────────
+    if (_match(text, [
+      'hỗ trợ',
+      'trợ giúp',
+      'help',
+      'hướng dẫn',
+      'làm sao',
+      'như thế nào',
+      'có thể giúp'
+    ])) {
+      return 'Tôi có thể hỗ trợ bạn về 🤖\n\n'
+          '🔍 Tìm BĐS theo giá & khu vực\n'
+          '📅 Đặt lịch xem nhà\n'
+          '💬 Nhắn tin với chủ nhà\n'
+          '📝 Đăng tin bán/cho thuê\n'
+          '🥽 Dịch vụ thiết kế VR (10–35 triệu)\n'
+          '🌟 Gói thành viên chủ nhà\n\n'
           'Bạn cần hỗ trợ mục nào?';
     }
 
-    // Mặc định
-    final defaults = [
-      'Tôi hiểu bạn đang hỏi về "$userText" 🤔 Hiện tôi chỉ hỗ trợ '
-          'các câu hỏi về mua bán bất động sản và dịch vụ Roomify. '
-          'Bạn có thể hỏi cụ thể hơn không?',
-      'Cảm ơn bạn đã liên hệ Roomify Bot! 🏠 Tôi chuyên tư vấn về '
-          'mua bán bất động sản. Bạn muốn biết gì không?\n\n'
-          'Gợi ý: hỏi về giá, khu vực, pháp lý, hoặc cách đăng tin bán.',
-    ];
-    return defaults[Random().nextInt(defaults.length)];
+    // ── Mặc định ─────────────────────────────────────────────────────────
+    return 'Xin lỗi, tôi chưa hiểu câu hỏi của bạn 😅\n\n'
+        'Bạn có thể hỏi về:\n'
+        '• "Giá thiết kế VR bao nhiêu?"\n'
+        '• "Cách đăng tin bán nhà"\n'
+        '• "Giá thuê căn hộ ở Q1"\n'
+        '• "Làm sao đặt lịch xem nhà?"\n'
+        '• "Khu vực nào có nhà cho thuê?"';
   }
 
   static bool _match(String text, List<String> keywords) {
@@ -148,7 +336,10 @@ class _BotEngine {
 // ─────────────────────────────────────────────────────────────────────────────
 
 class ChatBotScreen extends StatefulWidget {
-  const ChatBotScreen({super.key});
+  const ChatBotScreen({super.key, this.embedded = false});
+
+  /// Nếu true: ẩn AppBar (dùng trong dialog có title bar riêng).
+  final bool embedded;
 
   @override
   State<ChatBotScreen> createState() => _ChatBotScreenState();
@@ -183,12 +374,13 @@ class _ChatBotScreenState extends State<ChatBotScreen> {
     _localMessages.add(ChatMessage(
       id: 'welcome',
       text: 'Xin chào! Tôi là Roomify Bot 🏠\n'
-          'Roomify là nền tảng trung gian mua bán bất động sản tại Việt Nam.\n\n'
-          'Tôi có thể giúip bạn:\n'
-          '🔍 Tìm bất động sản theo giá & khu vực\n'
-          '📜 Tư vấn pháp lý mua bán\n'
-          '📝 Hướng dẫn đăng tin bán\n'
-          '🥽 Xem VR 360° trước khi quyết định\n\n'
+          'Roomify là nền tảng mua bán & cho thuê BĐS tích hợp VR 360°.\n\n'
+          'Tôi có thể giúp bạn:\n'
+          '🔍 Tìm BĐS theo giá & khu vực\n'
+          '📅 Đặt lịch xem nhà với chủ nhà\n'
+          '💬 Hướng dẫn nhắn tin với chủ nhà\n'
+          '📝 Đăng tin bán/cho thuê (từ 50.000đ)\n'
+          '🥽 Thiết kế VR cho chủ nhà (10–35 triệu)\n\n'
           'Bạn cần hỗ trợ gì hôm nay?',
       isUser: false,
       timestamp: DateTime.now(),
@@ -222,18 +414,10 @@ class _ChatBotScreenState extends State<ChatBotScreen> {
       isUser: true,
     );
 
-    // Gọi Gemini API — fallback sang bot quy tắc nếu chưa cấu hình key.
+    // Gọi Gemini API — fallback sang bot quy tắc nếu lỗi bất kỳ.
     String botText;
     try {
       botText = await GeminiService.chat(text);
-    } on GeminiException catch (e) {
-      // Chưa điền API key → dùng bot quy tắc offline.
-      botText = _BotEngine.reply(text);
-      // Hiện thị lỗi nhỏ nếu đã điền key nhưng bị lỗi API.
-      if (!e.message.contains('Chưa cấu hình')) {
-        botText =
-            '⚠️ Lỗi kết nối AI: ${e.message}\n\n${_BotEngine.reply(text)}';
-      }
     } catch (_) {
       botText = _BotEngine.reply(text);
     }
@@ -313,71 +497,73 @@ class _ChatBotScreenState extends State<ChatBotScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: roomifyCream,
-      appBar: AppBar(
-        backgroundColor: roomifyNavy,
-        foregroundColor: Colors.white,
-        title: Row(
-          children: [
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: roomifyGold,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Icon(
-                CupertinoIcons.sparkles,
-                color: roomifyNavy,
-                size: 20,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Roomify Bot',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.white,
+      appBar: widget.embedded
+          ? null
+          : AppBar(
+              backgroundColor: roomifyNavy,
+              foregroundColor: Colors.white,
+              title: Row(
+                children: [
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: roomifyGold,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(
+                      CupertinoIcons.sparkles,
+                      color: roomifyNavy,
+                      size: 20,
+                    ),
                   ),
-                ),
-                Row(
-                  children: [
-                    Container(
-                      width: 7,
-                      height: 7,
-                      margin: const EdgeInsets.only(right: 4),
-                      decoration: const BoxDecoration(
-                        color: Color(0xFF4ADE80),
-                        shape: BoxShape.circle,
+                  const SizedBox(width: 10),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Roomify Bot',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
+                        ),
                       ),
-                    ),
-                    Text(
-                      _firestoreReady
-                          ? 'Online · Kết nối Firebase'
-                          : 'Demo mode',
-                      style: const TextStyle(
-                        fontSize: 11,
-                        color: Colors.white70,
+                      Row(
+                        children: [
+                          Container(
+                            width: 7,
+                            height: 7,
+                            margin: const EdgeInsets.only(right: 4),
+                            decoration: const BoxDecoration(
+                              color: Color(0xFF4ADE80),
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          Text(
+                            _firestoreReady
+                                ? 'Online · Kết nối Firebase'
+                                : 'Demo mode',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: Colors.white70,
+                            ),
+                          ),
+                        ],
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
+                ],
+              ),
+              actions: [
+                IconButton(
+                  icon: const Icon(CupertinoIcons.trash, size: 20),
+                  tooltip: 'Xóa lịch sử',
+                  onPressed: _clearHistory,
                 ),
+                const SizedBox(width: 4),
               ],
             ),
-          ],
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(CupertinoIcons.trash, size: 20),
-            tooltip: 'Xóa lịch sử',
-            onPressed: _clearHistory,
-          ),
-          const SizedBox(width: 4),
-        ],
-      ),
       body: Column(
         children: [
           // Banner khi chưa đăng nhập
@@ -618,10 +804,11 @@ class _QuickReplies extends StatelessWidget {
 
   static const _chips = [
     '💰 Giá mua nhà bao nhiêu?',
-    '📍 Khu vực nào?',
-    '🏢 Loại bất động sản',
-    '📜 Tư vấn pháp lý',
-    '📝 Cách đăng tin bán',
+    '🥽 Giá thiết kế VR?',
+    '📅 Cách đặt lịch xem nhà?',
+    '📝 Cách đăng tin bán?',
+    '💬 Nhắn tin với chủ nhà?',
+    '📍 Khu vực hoạt động?',
   ];
 
   @override
