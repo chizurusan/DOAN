@@ -708,15 +708,10 @@ class SplashScreen extends StatelessWidget {
               children: [
                 const Spacer(),
                 Container(
-                  width: 122,
-                  height: 122,
+                  width: 160,
+                  height: 160,
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(34),
-                    gradient: const LinearGradient(
-                      colors: [roomifyGold, Color(0xFFF2E3B0)],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
                     boxShadow: [
                       BoxShadow(
                         color: roomifyGold.withValues(alpha: 0.28),
@@ -725,13 +720,11 @@ class SplashScreen extends StatelessWidget {
                       ),
                     ],
                   ),
-                  alignment: Alignment.center,
-                  child: const Text(
-                    'R',
-                    style: TextStyle(
-                      color: roomifyNavy,
-                      fontSize: 52,
-                      fontWeight: FontWeight.w800,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(34),
+                    child: Image.asset(
+                      'assets/images/logo_icon.jpg',
+                      fit: BoxFit.cover,
                     ),
                   ),
                 ),
