@@ -1,5 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
@@ -21,6 +19,7 @@ class MemberConversationsScreen extends StatefulWidget {
 
 class _MemberConversationsScreenState extends State<MemberConversationsScreen> {
   final _searchCtrl = TextEditingController();
+  final _searchFocus = FocusNode();
   String _query = '';
 
   // Phone-lookup state
@@ -31,6 +30,7 @@ class _MemberConversationsScreenState extends State<MemberConversationsScreen> {
   @override
   void dispose() {
     _searchCtrl.dispose();
+    _searchFocus.dispose();
     super.dispose();
   }
 
@@ -56,8 +56,8 @@ class _MemberConversationsScreenState extends State<MemberConversationsScreen> {
     if (_foundUser == null) return;
     final otherUid = _foundUser!['uid'] as String;
     final otherName =
-        (_foundUser!['name'] as String?)?.trim().isNotEmpty == true
-            ? _foundUser!['name'] as String
+        (_foundUser!['full_name'] as String?)?.trim().isNotEmpty == true
+            ? _foundUser!['full_name'] as String
             : (_foundUser!['email'] as String? ?? 'Người dùng');
     if (otherUid == currentUid) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -91,10 +91,9 @@ class _MemberConversationsScreenState extends State<MemberConversationsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<User?>(
+    return StreamBuilder<AppUser?>(
       stream: AuthService.instance.authStateChanges,
       builder: (context, snapshot) {
-        // Đang chờ Firebase restore session
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Scaffold(
             body: Center(child: CircularProgressIndicator()),
@@ -137,6 +136,7 @@ class _MemberConversationsScreenState extends State<MemberConversationsScreen> {
                       Expanded(
                         child: TextField(
                           controller: _searchCtrl,
+                          focusNode: _searchFocus,
                           onChanged: (v) {
                             setState(() {
                               _query = v;
@@ -246,34 +246,31 @@ class _MemberConversationsScreenState extends State<MemberConversationsScreen> {
             ),
             // ── Conversation list ──────────────────────────────
             Expanded(
-              child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              child: StreamBuilder<List<Map<String, dynamic>>>(
                 stream: FirestoreService.instance.getMyConversationsStream(uid),
                 builder: (context, snap) {
                   if (snap.connectionState == ConnectionState.waiting) {
                     return const Center(child: CircularProgressIndicator());
                   }
 
-                  final docs = snap.data?.docs ?? [];
+                  final docs = snap.data ?? [];
                   final sorted = [...docs]..sort((a, b) {
-                      final ta =
-                          (a.data()['lastTime'] as Timestamp?)?.seconds ?? 0;
-                      final tb =
-                          (b.data()['lastTime'] as Timestamp?)?.seconds ?? 0;
+                      final ta = (a['lastTime'] as int?) ?? 0;
+                      final tb = (b['lastTime'] as int?) ?? 0;
                       return tb.compareTo(ta);
                     });
 
                   // Filter by search query (non-phone)
                   final filtered = _query.isNotEmpty && !_isPhoneQuery
                       ? sorted.where((doc) {
-                          final data = doc.data();
                           final names =
-                              (data['participantNames'] as Map? ?? {});
+                              (doc['participantNames'] as Map? ?? {});
                           final other = names.entries
                               .where((e) => e.key.toString() != uid)
                               .map((e) => e.value.toString().toLowerCase())
                               .join(' ');
                           final propTitle =
-                              (data['propertyTitle'] as String? ?? '')
+                              (doc['propertyTitle'] as String? ?? '')
                                   .toLowerCase();
                           return other.contains(_query.toLowerCase()) ||
                               propTitle.contains(_query.toLowerCase());
@@ -291,10 +288,10 @@ class _MemberConversationsScreenState extends State<MemberConversationsScreen> {
                     padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
                     itemCount: filtered.length,
                     separatorBuilder: (_, __) =>
-                        const Divider(height: 1, indent: 68),
+                        const SizedBox(height: 8),
                     itemBuilder: (context, i) {
-                      final data = filtered[i].data();
-                      final chatId = filtered[i].id;
+                      final data = filtered[i];
+                      final chatId = data['id'] as String? ?? '';
 
                       final names = Map<String, String>.from(
                         (data['participantNames'] as Map? ?? {}).map(
@@ -309,8 +306,11 @@ class _MemberConversationsScreenState extends State<MemberConversationsScreen> {
                       final otherName = otherEntry.value;
                       final lastMsg = data['lastMessage'] as String? ?? '';
                       final propertyTitle = data['propertyTitle'] as String?;
-                      final ts = data['lastTime'] as Timestamp?;
-                      final time = ts != null ? _formatTime(ts.toDate()) : '';
+                      final tsMs = data['lastTime'] as int?;
+                      final time = tsMs != null
+                          ? _formatTime(
+                              DateTime.fromMillisecondsSinceEpoch(tsMs))
+                          : '';
 
                       return _ConversationTile(
                         otherName: otherName,
@@ -357,8 +357,8 @@ class _PhoneResultCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final name = (user['name'] as String?)?.trim().isNotEmpty == true
-        ? user['name'] as String
+    final name = (user['full_name'] as String?)?.trim().isNotEmpty == true
+        ? user['full_name'] as String
         : (user['email'] as String? ?? 'Người dùng');
     return Container(
       padding: const EdgeInsets.all(12),
@@ -428,53 +428,88 @@ class _ConversationTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 10),
-        child: Row(
-          children: [
-            CircleAvatar(
-              radius: 24,
-              backgroundColor: _navy,
-              child: Text(
-                otherName.isNotEmpty ? otherName[0].toUpperCase() : '?',
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 17,
-                    fontWeight: FontWeight.bold),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(otherName,
-                      style: const TextStyle(
-                          fontWeight: FontWeight.w600,
-                          color: _navy,
-                          fontSize: 15)),
-                  if (propertyTitle != null)
-                    Text(
-                      'BĐS: $propertyTitle',
-                      style:
-                          const TextStyle(fontSize: 11, color: Colors.black38),
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(16),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(16),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
+            child: Row(
+              children: [
+                Container(
+                  width: 50,
+                  height: 50,
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [_navy, Color(0xFF1B3A6B)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
                     ),
-                  Text(
-                    lastMsg,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: Colors.black54, fontSize: 13),
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: _navy.withOpacity(0.18),
+                        blurRadius: 8,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
                   ),
-                ],
-              ),
+                  child: Center(
+                    child: Text(
+                      otherName.isNotEmpty ? otherName[0].toUpperCase() : '?',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(otherName,
+                          style: const TextStyle(
+                              fontWeight: FontWeight.w600,
+                              color: _navy,
+                              fontSize: 15)),
+                      if (propertyTitle != null)
+                        Text(
+                          'BĐS: $propertyTitle',
+                          style:
+                              const TextStyle(fontSize: 11, color: Colors.black38),
+                        ),
+                      Text(
+                        lastMsg,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Colors.black54, fontSize: 13),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(time,
+                    style: const TextStyle(fontSize: 11, color: Colors.black38)),
+              ],
             ),
-            const SizedBox(width: 8),
-            Text(time,
-                style: const TextStyle(fontSize: 11, color: Colors.black38)),
-          ],
+          ),
         ),
       ),
     );
@@ -498,11 +533,15 @@ class _EmptyState extends StatelessWidget {
               width: 72,
               height: 72,
               decoration: BoxDecoration(
-                color: _navy.withValues(alpha: 0.07),
+                gradient: LinearGradient(
+                  colors: [_navy.withOpacity(0.08), _navy.withOpacity(0.04)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
                 shape: BoxShape.circle,
               ),
               child: const Icon(CupertinoIcons.chat_bubble_2,
-                  size: 34, color: Colors.black26),
+                  size: 34, color: Colors.black38),
             ),
             const SizedBox(height: 16),
             Text(
@@ -599,8 +638,18 @@ class _MemberChatScreenState extends State<MemberChatScreen> {
     return Scaffold(
       backgroundColor: _cream,
       appBar: AppBar(
-        backgroundColor: _navy,
+        flexibleSpace: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              colors: [_navy, Color(0xFF1B3A6B)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+          ),
+        ),
+        backgroundColor: Colors.transparent,
         foregroundColor: Colors.white,
+        elevation: 0,
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -619,14 +668,14 @@ class _MemberChatScreenState extends State<MemberChatScreen> {
       body: Column(
         children: [
           Expanded(
-            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            child: StreamBuilder<List<Map<String, dynamic>>>(
               stream: FirestoreService.instance
                   .getMemberMessagesStream(widget.chatId),
               builder: (context, snap) {
                 if (snap.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());
                 }
-                final docs = snap.data?.docs ?? [];
+                final docs = snap.data ?? [];
                 if (docs.isEmpty) {
                   return const Center(
                     child: Text(
@@ -641,11 +690,11 @@ class _MemberChatScreenState extends State<MemberChatScreen> {
                       const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   itemCount: docs.length,
                   itemBuilder: (context, i) {
-                    final data = docs[i].data();
+                    final data = docs[i];
                     return _Bubble(
                       text: data['text'] as String? ?? '',
-                      isMe: data['senderId'] == uid,
-                      senderName: data['senderName'] as String? ?? '',
+                      isMe: data['sender_id'] == uid,
+                      senderName: data['sender_name'] as String? ?? '',
                     );
                   },
                 );

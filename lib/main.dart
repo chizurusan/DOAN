@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io' as import_io;
 
-import 'package:firebase_core/firebase_core.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -12,7 +12,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import 'src/firebase_options.dart';
+import 'src/supabase_config.dart';
 import 'src/auth_service.dart';
 import 'src/chat_screen.dart';
 import 'src/firestore_service.dart';
@@ -24,13 +24,10 @@ import 'src/profile_screen.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
-  try {
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
-  } catch (_) {
-    // Firebase chưa được cấu hình – chạy ở chế độ demo (không cần database).
-  }
+  await Supabase.initialize(
+    url: supabaseUrl,
+    anonKey: supabaseAnonKey,
+  );
   runApp(const RoomifyApp());
 }
 
@@ -152,8 +149,6 @@ class _RoomifyAppState extends State<RoomifyApp> {
   @override
   void initState() {
     super.initState();
-    // Lắng nghe trạng thái đăng nhập từ Firebase (bỏ qua khi chạy demo).
-    if (Firebase.apps.isEmpty) return;
     AuthService.instance.authStateChanges.listen((user) async {
       if (!mounted) return;
       if (user != null) {
@@ -163,7 +158,7 @@ class _RoomifyAppState extends State<RoomifyApp> {
         final profile = await FirestoreService.instance.getUserProfile(
           user.uid,
         );
-        final tierStr = profile?['membershipTier'] as String?;
+        final tierStr = profile?['membership_tier'] as String?;
         final tier = tierStr == null
             ? null
             : MembershipTier.values.firstWhere(
@@ -236,7 +231,7 @@ class _RoomifyAppState extends State<RoomifyApp> {
 
     final plan = membershipPlanInfo(tier);
     final uid = AuthService.instance.currentUser?.uid;
-    if (uid != null && Firebase.apps.isNotEmpty) {
+    if (uid != null) {
       await FirestoreService.instance.updateMembershipTier(uid, tier.name);
     }
     setState(() {
@@ -361,7 +356,7 @@ class _RoomifyShellState extends State<RoomifyShell> {
   }
 
   PropertyItem _docToProperty(Map<String, dynamic> data) {
-    final vrUrl = data['vrUrl'] as String?;
+    final vrUrl = data['vr_url'] as String?;
     final panorama = (vrUrl?.isNotEmpty == true) ? vrUrl : null;
     // Chọn Matterport demo xoay vòng dựa theo hash của doc id
     final docId = data['_id'] as String? ?? '';
@@ -383,6 +378,8 @@ class _RoomifyShellState extends State<RoomifyShell> {
 
     return PropertyItem(
       id: docId.hashCode.abs(),
+      listingId: docId,
+      viewCount: (data['view_count'] as int?) ?? 0,
       title: data['title'] as String? ?? 'Không có tiêu đề',
       location: data['location'] as String? ?? 'Không xác định',
       type: data['type'] as String? ?? 'Căn hộ',
@@ -404,13 +401,13 @@ class _RoomifyShellState extends State<RoomifyShell> {
       ],
       featured: false,
       colors: const [Color(0xFF19365D), roomifyGold, Color(0xFFE7EEF8)],
-      ownerName: data['ownerName'] as String? ?? 'Chủ nhà',
+      ownerName: data['owner_name'] as String? ?? 'Chủ nhà',
       ownerRole: 'Chủ nhà',
-      ownerPhone: data['ownerPhone'] as String? ?? '',
-      imageUrl: data['imageUrl'] as String?,
+      ownerPhone: data['owner_phone'] as String? ?? '',
+      imageUrl: data['image_url'] as String?,
       panoramaUrl: panorama,
       matterportUrl: (vrUrl?.isNotEmpty == true) ? demoMatterport : null,
-      ownerId: data['userId'] as String?,
+      ownerId: data['user_id'] as String?,
     );
   }
 
@@ -447,13 +444,25 @@ class _RoomifyShellState extends State<RoomifyShell> {
 
   Future<void> _handleProfileTap() async {
     if (widget.isAuthenticated) {
+      final allProperties = [...mockProperties, ..._firestoreProperties];
+      final savedMaps = allProperties
+          .where((p) => _savedPropertyIds.contains(p.id))
+          .map((p) => {
+                'id': p.id,
+                'title': p.title,
+                'location': p.location,
+                'price': p.price,
+                'type': p.type,
+                'bedrooms': p.bedrooms,
+                'area': p.area,
+                'imageUrl': p.imageUrl,
+              })
+          .toList();
       await Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => ProfileScreen(
-            onLogout: () {
-              // Logout được xử lý bởi AuthService, state sẽ tự cập nhật
-              // qua authStateChanges stream ở cấp độ RoomifyApp.
-            },
+            onLogout: () {},
+            savedProperties: savedMaps,
           ),
         ),
       );
@@ -514,6 +523,12 @@ class _RoomifyShellState extends State<RoomifyShell> {
       _selectedProperty = property;
     });
 
+    // Tăng lượt xem cho tin từ user_listings
+    final lid = property.listingId;
+    if (lid != null && lid.isNotEmpty) {
+      FirestoreService.instance.incrementViewCount(lid);
+    }
+
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => PropertyDetailPage(
@@ -558,6 +573,9 @@ class _RoomifyShellState extends State<RoomifyShell> {
         savedPropertyIds: _savedPropertyIds,
         isAuthenticated: widget.isAuthenticated,
         membershipTier: widget.membershipTier,
+        onCategoryTap: (category) {
+          setState(() => _currentTab = AppTab.listings);
+        },
       ),
       ListingsScreen(
         properties: allProperties,
@@ -618,14 +636,14 @@ class _RoomifyShellState extends State<RoomifyShell> {
                 mini: true,
                 elevation: 4,
                 tooltip: 'Chat Bot AI',
-                child: const Icon(CupertinoIcons.chat_bubble_text_fill),
+                child: const Icon(CupertinoIcons.waveform_circle_fill),
               ),
             ),
           ),
         ],
       ),
       bottomNavigationBar: NavigationBar(
-        height: 72,
+        height: 64,
         selectedIndex: _currentTab.index,
         backgroundColor: roomifyNavy,
         indicatorColor: roomifyGold.withValues(alpha: 0.22),
@@ -644,9 +662,9 @@ class _RoomifyShellState extends State<RoomifyShell> {
             label: 'Trang chủ',
           ),
           NavigationDestination(
-            icon: Icon(CupertinoIcons.square_grid_2x2, color: Colors.white60),
+            icon: Icon(CupertinoIcons.building_2_fill, color: Colors.white60),
             selectedIcon: Icon(
-              CupertinoIcons.square_grid_2x2_fill,
+              CupertinoIcons.building_2_fill,
               color: Colors.white,
             ),
             label: 'Khám phá',
@@ -660,9 +678,9 @@ class _RoomifyShellState extends State<RoomifyShell> {
             label: 'Tin nhắn',
           ),
           NavigationDestination(
-            icon: Icon(CupertinoIcons.add_circled, color: Colors.white60),
+            icon: Icon(CupertinoIcons.plus_square, color: Colors.white60),
             selectedIcon: Icon(
-              CupertinoIcons.add_circled_solid,
+              CupertinoIcons.plus_square_fill,
               color: Colors.white,
             ),
             label: 'Đăng tin',
@@ -820,6 +838,7 @@ class HomeScreen extends StatefulWidget {
     required this.savedPropertyIds,
     required this.isAuthenticated,
     required this.membershipTier,
+    required this.onCategoryTap,
   });
 
   final List<PropertyItem> featured;
@@ -831,6 +850,7 @@ class HomeScreen extends StatefulWidget {
   final Set<int> savedPropertyIds;
   final bool isAuthenticated;
   final MembershipTier? membershipTier;
+  final ValueChanged<String> onCategoryTap;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -875,52 +895,64 @@ class _HomeScreenState extends State<HomeScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    children: [
-                      ProfileAvatarButton(
-                        isAuthenticated: widget.isAuthenticated,
-                        membershipTier: widget.membershipTier,
-                        onTap: widget.onProfileTap,
-                      ),
-                      const SizedBox(width: 14),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            LabelText(
-                              widget.isAuthenticated
-                                  ? 'Xin chào trở lại'
-                                  : 'Khám phá tự do',
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              widget.isAuthenticated
-                                  ? 'Bạn muốn xem căn nào hôm nay?'
-                                  : 'Roomify đang mở sẵn để bạn khám phá.',
-                              style: Theme.of(context).textTheme.titleMedium,
-                            ),
-                          ],
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 14),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(22),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.05),
+                          blurRadius: 12,
+                          offset: const Offset(0, 4),
                         ),
-                      ),
-                      HeaderIconButton(
-                        icon: CupertinoIcons.bell,
-                        onPressed: widget.onNotificationTap,
-                      ),
-                    ],
+                      ],
+                    ),
+                    child: Row(
+                      children: [
+                        ProfileAvatarButton(
+                          isAuthenticated: widget.isAuthenticated,
+                          membershipTier: widget.membershipTier,
+                          onTap: widget.onProfileTap,
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              LabelText(
+                                widget.isAuthenticated
+                                    ? 'Xin chào trở lại'
+                                    : 'Khám phá tự do',
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                widget.isAuthenticated
+                                    ? 'Bạn muốn xem căn nào hôm nay?'
+                                    : 'Roomify đang mở sẵn để bạn khám phá.',
+                                style: Theme.of(context).textTheme.titleMedium,
+                              ),
+                            ],
+                          ),
+                        ),
+                        const _NotificationBell(),
+                      ],
+                    ),
                   ),
                   const SizedBox(height: 24),
                   const LabelText('Roomify Mobile'),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 6),
                   Text(
                     'Tìm nơi phù hợp với bạn',
                     style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                          fontSize: 34,
-                          height: 1.04,
+                          fontSize: 32,
+                          height: 1.06,
                         ),
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 8),
                   Text(
-                    'Ưu tiên trải nghiệm khám phá như một app mobile thật: tìm kiếm nhanh, xem VR ngay và chỉ đăng nhập khi bạn muốn đặt lịch hoặc lưu tin.',
+                    'Khám phá bất động sản, xem VR 360 và liên hệ chủ nhà chỉ trong vài giây.',
                     style: Theme.of(context).textTheme.bodyLarge,
                   ),
                   const SizedBox(height: 18),
@@ -968,7 +1000,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   const SizedBox(height: 14),
                   SizedBox(
-                    height: 110,
+                    height: 104,
                     child: ListView.separated(
                       scrollDirection: Axis.horizontal,
                       itemCount: categories.length,
@@ -979,6 +1011,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         return CategoryCard(
                           label: entry.key,
                           count: entry.value,
+                          onTap: () => widget.onCategoryTap(entry.key),
                         );
                       },
                     ),
@@ -1341,6 +1374,8 @@ class ConnectScreen extends StatefulWidget {
 
 class _ConnectScreenState extends State<ConnectScreen> {
   final _formKey = GlobalKey<FormState>();
+  final _formCardKey = GlobalKey();
+  final _scrollController = ScrollController();
   final _nameController = TextEditingController();
   final _phoneController = TextEditingController();
   final _scheduleController = TextEditingController();
@@ -1368,7 +1403,19 @@ class _ConnectScreenState extends State<ConnectScreen> {
     _phoneController.dispose();
     _scheduleController.dispose();
     _notesController.dispose();
+    _scrollController.dispose();
     super.dispose();
+  }
+
+  void _scrollToForm() {
+    final ctx = _formCardKey.currentContext;
+    if (ctx != null) {
+      Scrollable.ensureVisible(
+        ctx,
+        duration: const Duration(milliseconds: 400),
+        curve: Curves.easeInOut,
+      );
+    }
   }
 
   Future<void> _submit() async {
@@ -1396,6 +1443,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
         schedule:
             _scheduleController.text.isEmpty ? null : _scheduleController.text,
         notes: _notesController.text.isEmpty ? null : _notesController.text,
+        ownerId: widget.property.ownerId,
       );
     }
 
@@ -1429,6 +1477,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
           ),
         ),
         child: CustomScrollView(
+          controller: _scrollController,
           slivers: [
             const NativeSliverHeader(
               title: 'Đặt lịch và liên hệ',
@@ -1454,9 +1503,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
                       primaryLabel: _mode == ConnectMode.book
                           ? 'Gửi yêu cầu xem nhà'
                           : 'Gửi yêu cầu tư vấn',
-                      onPrimaryAction: () {
-                        _submit();
-                      },
+                      onPrimaryAction: _scrollToForm,
                     ),
                     // Nút nhắn tin trực tiếp (chỉ hiện với tin đăng từ Firestore)
                     Builder(builder: (context) {
@@ -1504,6 +1551,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
                     ),
                     const SizedBox(height: 18),
                     NativeFormCard(
+                      key: _formCardKey,
                       child: Form(
                         key: _formKey,
                         child: Column(
@@ -1939,79 +1987,8 @@ class _PostPropertyScreenState extends State<PostPropertyScreen> {
                     ),
                   ),
                   const SizedBox(height: 18),
-                  // ── Banner liên hệ thiết kế VR ─────────────────────────
-                  NativeFormCard(
-                    backgroundColor: roomifyNavy,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const LabelText('Dịch vụ của Roomify',
-                            color: roomifyGold),
-                        const SizedBox(height: 10),
-                        const Text(
-                          'Thiết kế Tour VR / 360° cho BĐS của bạn',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 18,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        const Text(
-                          'Đội ngũ Roomify chụp ảnh, dựng 3D và tạo tour VR chuyên nghiệp, giúp BĐS nổi bật và thu hút khách xem nhà từ xa.',
-                          style: TextStyle(color: Colors.white70, height: 1.5),
-                        ),
-                        const SizedBox(height: 10),
-                        const Text(
-                          '📸 Gói 1: 10.000.000đ — Chụp 360° + Tour cơ bản\n'
-                          '🎯 Gói 2: 15.000.000đ — Tour VR tương tác đầy đủ\n'
-                          '⭐ Gói 3: 35.000.000đ — 3D photorealistic cao cấp',
-                          style: TextStyle(color: Colors.white, height: 1.7),
-                        ),
-                        const SizedBox(height: 14),
-                        OutlinedButton.icon(
-                          onPressed: () => showDialog(
-                            context: context,
-                            builder: (_) => AlertDialog(
-                              title: const Text('Liên hệ thiết kế VR/360°'),
-                              content: const Column(
-                                mainAxisSize: MainAxisSize.min,
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                      'Đội ngũ Roomify VR sẵn sàng hỗ trợ bạn!'),
-                                  SizedBox(height: 12),
-                                  Text('📞 Hotline: 0901 234 567'),
-                                  SizedBox(height: 4),
-                                  Text('📧 Email: vr@roomify.vn'),
-                                  SizedBox(height: 4),
-                                  Text('🌐 roomify.vn/vr-design'),
-                                ],
-                              ),
-                              actions: [
-                                FilledButton(
-                                  onPressed: () => Navigator.pop(context),
-                                  style: FilledButton.styleFrom(
-                                      backgroundColor: roomifyNavy),
-                                  child: const Text('Đã hiểu'),
-                                ),
-                              ],
-                            ),
-                          ),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: roomifyGold,
-                            side: const BorderSide(color: roomifyGold),
-                            minimumSize: const Size.fromHeight(48),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(14),
-                            ),
-                          ),
-                          icon: const Icon(CupertinoIcons.phone_fill),
-                          label: const Text('Liên hệ đội ngũ VR của Roomify'),
-                        ),
-                      ],
-                    ),
-                  ),
+                  // ── Dịch vụ VR của Roomify ─────────────────────────────
+                  const _VrServicesSection(),
                   // ── Tin đã đăng của người dùng ─────────────────────────
                   const _UserPostingsSection(),
                   const SizedBox(height: 18),
@@ -2032,6 +2009,526 @@ class _PostPropertyScreenState extends State<PostPropertyScreen> {
                 ],
               ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Dịch vụ VR Roomify ────────────────────────────────────────────────────────
+
+class _VrServicesSection extends StatelessWidget {
+  const _VrServicesSection();
+
+  void _showContact(BuildContext context, String packageType, String packageName) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _VrContactSheet(
+        packageType: packageType,
+        packageName: packageName,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Header
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: roomifyNavy,
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const LabelText('Dịch vụ của Roomify', color: roomifyGold),
+              const SizedBox(height: 8),
+              const Text(
+                'Thiết kế Tour VR / 360°',
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Đội ngũ chuyên nghiệp chụp ảnh, dựng 3D và tạo tour VR giúp BĐS nổi bật, thu hút khách xem nhà từ xa.',
+                style: TextStyle(color: Colors.white60, height: 1.55, fontSize: 13),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        // 3 service cards
+        _ServiceCard(
+          badge: 'CƠ BẢN',
+          badgeColor: const Color(0xFF3B82F6),
+          icon: CupertinoIcons.camera_fill,
+          title: 'Chụp 360° & Tour cơ bản',
+          price: '10.000.000đ',
+          features: const [
+            'Chụp toàn bộ không gian 360°',
+            'Tour ảnh panorama cơ bản',
+            'Xuất link chia sẻ online',
+          ],
+          onContact: () => _showContact(context, 'vr_basic', 'Dịch vụ VR Cơ bản — 10.000.000đ'),
+        ),
+        const SizedBox(height: 10),
+
+        _ServiceCard(
+          badge: 'PHỔ BIẾN',
+          badgeColor: const Color(0xFF8B5CF6),
+          icon: CupertinoIcons.cube_box_fill,
+          title: 'Tour VR tương tác đầy đủ',
+          price: '15.000.000đ',
+          features: const [
+            'Tour VR tương tác điều hướng',
+            'Hotspot thông tin từng phòng',
+            'Tương thích điện thoại & máy tính',
+          ],
+          isHighlighted: true,
+          onContact: () => _showContact(context, 'vr_pro', 'Dịch vụ VR Chuyên nghiệp — 15.000.000đ'),
+        ),
+        const SizedBox(height: 10),
+
+        _ServiceCard(
+          badge: 'CAO CẤP',
+          badgeColor: roomifyGold,
+          icon: CupertinoIcons.star_fill,
+          title: '3D Photorealistic cao cấp',
+          price: '35.000.000đ',
+          features: const [
+            'Dựng hình 3D photorealistic',
+            'Ánh sáng & vật liệu siêu thực',
+            'Video walkthrough chuyên nghiệp',
+          ],
+          onContact: () => _showContact(context, 'vr_premium', 'Dịch vụ VR Cao cấp — 35.000.000đ'),
+        ),
+      ],
+    );
+  }
+}
+
+// ── VR Contact Bottom Sheet ───────────────────────────────────────────────────
+
+class _VrContactSheet extends StatefulWidget {
+  const _VrContactSheet({
+    required this.packageType,
+    required this.packageName,
+  });
+
+  final String packageType;
+  final String packageName;
+
+  @override
+  State<_VrContactSheet> createState() => _VrContactSheetState();
+}
+
+class _VrContactSheetState extends State<_VrContactSheet> {
+  final _formKey = GlobalKey<FormState>();
+  final _nameCtrl = TextEditingController();
+  final _phoneCtrl = TextEditingController();
+  final _addressCtrl = TextEditingController();
+  final _notesCtrl = TextEditingController();
+  bool _submitting = false;
+  bool _submitted = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Pre-fill nếu đã đăng nhập
+    final user = AuthService.instance.currentUser;
+    if (user != null) {
+      _nameCtrl.text = user.displayName ?? '';
+    }
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _phoneCtrl.dispose();
+    _addressCtrl.dispose();
+    _notesCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _submitting = true);
+    try {
+      await FirestoreService.instance.createServiceInquiry(
+        packageType: widget.packageType,
+        packageName: widget.packageName,
+        name: _nameCtrl.text,
+        phone: _phoneCtrl.text,
+        address: _addressCtrl.text,
+        notes: _notesCtrl.text,
+      );
+      if (mounted) setState(() { _submitting = false; _submitted = true; });
+    } catch (e) {
+      if (mounted) {
+        setState(() => _submitting = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Gửi thất bại: $e')),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottom = MediaQuery.of(context).viewInsets.bottom;
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      decoration: BoxDecoration(
+        color: roomifyCream,
+        borderRadius: BorderRadius.circular(24),
+      ),
+      padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + bottom),
+      child: _submitted ? _SuccessView(onClose: () => Navigator.pop(context)) : _FormView(
+        formKey: _formKey,
+        packageName: widget.packageName,
+        nameCtrl: _nameCtrl,
+        phoneCtrl: _phoneCtrl,
+        addressCtrl: _addressCtrl,
+        notesCtrl: _notesCtrl,
+        submitting: _submitting,
+        onSubmit: _submit,
+        onCancel: () => Navigator.pop(context),
+      ),
+    );
+  }
+}
+
+class _FormView extends StatelessWidget {
+  const _FormView({
+    required this.formKey,
+    required this.packageName,
+    required this.nameCtrl,
+    required this.phoneCtrl,
+    required this.addressCtrl,
+    required this.notesCtrl,
+    required this.submitting,
+    required this.onSubmit,
+    required this.onCancel,
+  });
+
+  final GlobalKey<FormState> formKey;
+  final String packageName;
+  final TextEditingController nameCtrl;
+  final TextEditingController phoneCtrl;
+  final TextEditingController addressCtrl;
+  final TextEditingController notesCtrl;
+  final bool submitting;
+  final VoidCallback onSubmit;
+  final VoidCallback onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      child: Form(
+        key: formKey,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(CupertinoIcons.cube_box_fill,
+                    color: roomifyNavy, size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Tư vấn dịch vụ VR',
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        color: roomifyNavy, fontWeight: FontWeight.w800),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(CupertinoIcons.xmark_circle_fill,
+                      color: Colors.black26),
+                  onPressed: onCancel,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: roomifyNavy.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                packageName,
+                style: const TextStyle(
+                    fontSize: 12,
+                    color: roomifyNavy,
+                    fontWeight: FontWeight.w600),
+              ),
+            ),
+            const SizedBox(height: 18),
+            AppTextField(
+              controller: nameCtrl,
+              label: 'Họ và tên',
+              hint: 'Nhập họ và tên',
+              validator: (v) =>
+                  v == null || v.trim().isEmpty ? 'Vui lòng nhập tên' : null,
+            ),
+            const SizedBox(height: 12),
+            AppTextField(
+              controller: phoneCtrl,
+              label: 'Số điện thoại',
+              hint: 'Nhập số điện thoại liên hệ',
+              keyboardType: TextInputType.phone,
+              validator: (v) =>
+                  v == null || v.trim().isEmpty ? 'Vui lòng nhập SĐT' : null,
+            ),
+            const SizedBox(height: 12),
+            AppTextField(
+              controller: addressCtrl,
+              label: 'Địa chỉ bất động sản',
+              hint: 'Ví dụ: 123 Nguyễn Huệ, Quận 1',
+            ),
+            const SizedBox(height: 12),
+            AppTextField(
+              controller: notesCtrl,
+              label: 'Ghi chú thêm',
+              hint: 'Diện tích, số phòng, yêu cầu đặc biệt...',
+              maxLines: 3,
+            ),
+            const SizedBox(height: 20),
+            FilledButton.icon(
+              onPressed: submitting ? null : onSubmit,
+              style: FilledButton.styleFrom(
+                backgroundColor: roomifyNavy,
+                minimumSize: const Size.fromHeight(52),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14)),
+              ),
+              icon: submitting
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white))
+                  : const Icon(CupertinoIcons.paperplane_fill, size: 16),
+              label: Text(submitting ? 'Đang gửi...' : 'Gửi yêu cầu tư vấn'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SuccessView extends StatelessWidget {
+  const _SuccessView({required this.onClose});
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const SizedBox(height: 16),
+        Container(
+          width: 72,
+          height: 72,
+          decoration: BoxDecoration(
+            color: const Color(0xFF10B981).withValues(alpha: 0.12),
+            shape: BoxShape.circle,
+          ),
+          child: const Icon(CupertinoIcons.checkmark_circle_fill,
+              color: Color(0xFF10B981), size: 40),
+        ),
+        const SizedBox(height: 16),
+        const Text(
+          'Đã gửi thành công!',
+          style: TextStyle(
+              fontSize: 20, fontWeight: FontWeight.w800, color: roomifyNavy),
+        ),
+        const SizedBox(height: 8),
+        const Text(
+          'Đội ngũ Roomify VR sẽ liên hệ với bạn trong vòng 24 giờ để tư vấn chi tiết.',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: Colors.black54, height: 1.55),
+        ),
+        const SizedBox(height: 24),
+        FilledButton(
+          onPressed: onClose,
+          style: FilledButton.styleFrom(
+            backgroundColor: roomifyNavy,
+            minimumSize: const Size(160, 48),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          ),
+          child: const Text('Đóng'),
+        ),
+        const SizedBox(height: 8),
+      ],
+    );
+  }
+}
+
+class _ServiceCard extends StatelessWidget {
+  const _ServiceCard({
+    required this.badge,
+    required this.badgeColor,
+    required this.icon,
+    required this.title,
+    required this.price,
+    required this.features,
+    required this.onContact,
+    this.isHighlighted = false,
+  });
+
+  final String badge;
+  final Color badgeColor;
+  final IconData icon;
+  final String title;
+  final String price;
+  final List<String> features;
+  final VoidCallback onContact;
+  final bool isHighlighted;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: isHighlighted ? roomifyNavy : Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: isHighlighted
+            ? Border.all(color: const Color(0xFF8B5CF6), width: 2)
+            : Border.all(color: Colors.black.withValues(alpha: 0.06)),
+        boxShadow: [
+          BoxShadow(
+            color: isHighlighted
+                ? const Color(0xFF8B5CF6).withValues(alpha: 0.15)
+                : Colors.black.withValues(alpha: 0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: badgeColor.withValues(alpha: isHighlighted ? 0.2 : 0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, color: badgeColor, size: 22),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: badgeColor.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        badge,
+                        style: TextStyle(
+                            color: badgeColor,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 0.8),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      title,
+                      style: TextStyle(
+                          color: isHighlighted ? Colors.white : roomifyNavy,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 15),
+                    ),
+                  ],
+                ),
+              ),
+              Text(
+                price,
+                style: TextStyle(
+                    color: badgeColor,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 15),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          ...features.map((f) => Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(
+                  children: [
+                    Icon(CupertinoIcons.checkmark_circle_fill,
+                        size: 14,
+                        color: isHighlighted
+                            ? Colors.white54
+                            : Colors.black26),
+                    const SizedBox(width: 8),
+                    Text(
+                      f,
+                      style: TextStyle(
+                          fontSize: 13,
+                          color: isHighlighted
+                              ? Colors.white70
+                              : Colors.black54),
+                    ),
+                  ],
+                ),
+              )),
+          const SizedBox(height: 14),
+          SizedBox(
+            width: double.infinity,
+            child: isHighlighted
+                ? FilledButton.icon(
+                    onPressed: onContact,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF8B5CF6),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                    icon: const Icon(CupertinoIcons.phone_fill, size: 15),
+                    label: const Text('Liên hệ tư vấn',
+                        style: TextStyle(fontWeight: FontWeight.w600)),
+                  )
+                : OutlinedButton.icon(
+                    onPressed: onContact,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: badgeColor,
+                      side: BorderSide(
+                          color: badgeColor.withValues(alpha: 0.5)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                    icon: const Icon(CupertinoIcons.phone_fill, size: 15),
+                    label: const Text('Liên hệ tư vấn',
+                        style: TextStyle(fontWeight: FontWeight.w600)),
+                  ),
           ),
         ],
       ),
@@ -2135,7 +2632,7 @@ class _UserPostingTile extends StatelessWidget {
         subtitle: Text('$price • $location',
             maxLines: 1, overflow: TextOverflow.ellipsis),
         trailing: IconButton(
-          icon: const Icon(CupertinoIcons.delete, color: Colors.red, size: 20),
+          icon: const Icon(CupertinoIcons.trash_fill, color: Colors.red, size: 20),
           tooltip: 'Xóa tin đăng',
           onPressed: () async {
             final confirm = await showDialog<bool>(
@@ -4026,9 +4523,282 @@ class HeaderIconButton extends StatelessWidget {
       style: IconButton.styleFrom(
         backgroundColor: Colors.white,
         foregroundColor: roomifyNavy,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        elevation: 1,
+        shadowColor: Colors.black.withOpacity(0.08),
       ),
       icon: Icon(icon),
+    );
+  }
+}
+
+// ── Notification Bell ──────────────────────────────────────────────────────
+
+class _NotificationBell extends StatelessWidget {
+  const _NotificationBell();
+
+  @override
+  Widget build(BuildContext context) {
+    final uid = AuthService.instance.currentUser?.uid;
+    if (uid == null) {
+      return HeaderIconButton(
+        icon: CupertinoIcons.bell,
+        onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Đăng nhập để nhận thông báo.')),
+        ),
+      );
+    }
+
+    return StreamBuilder<int>(
+      stream: FirestoreService.instance.getUnreadNotificationCount(uid),
+      builder: (context, snapshot) {
+        final count = snapshot.data ?? 0;
+        return Stack(
+          clipBehavior: Clip.none,
+          children: [
+            IconButton.filledTonal(
+              onPressed: () => _showPanel(context, uid),
+              style: IconButton.styleFrom(
+                backgroundColor: Colors.white,
+                foregroundColor: roomifyNavy,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14)),
+                elevation: 1,
+                shadowColor: Colors.black.withValues(alpha: 0.08),
+              ),
+              icon: const Icon(CupertinoIcons.bell),
+            ),
+            if (count > 0)
+              Positioned(
+                top: 4,
+                right: 4,
+                child: Container(
+                  width: 16,
+                  height: 16,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFE53935),
+                    shape: BoxShape.circle,
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    count > 9 ? '9+' : '$count',
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _showPanel(BuildContext context, String uid) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _NotificationsPanel(uid: uid),
+    );
+  }
+}
+
+class _NotificationsPanel extends StatelessWidget {
+  const _NotificationsPanel({required this.uid});
+  final String uid;
+
+  static const _typeIcons = <String, IconData>{
+    'booking_update': CupertinoIcons.calendar_today,
+    'property_approved': CupertinoIcons.checkmark_seal_fill,
+    'property_rejected': CupertinoIcons.xmark_seal_fill,
+    'new_message': CupertinoIcons.chat_bubble_fill,
+    'system_alert': CupertinoIcons.exclamationmark_circle_fill,
+    'general': CupertinoIcons.info_circle_fill,
+  };
+
+  static const _typeColors = <String, Color>{
+    'booking_update': Color(0xFF1565C0),
+    'property_approved': Color(0xFF2E7D32),
+    'property_rejected': Color(0xFFC62828),
+    'new_message': Color(0xFF6A1B9A),
+    'system_alert': Color(0xFFE65100),
+    'general': roomifyNavy,
+  };
+
+  String _timeAgo(String? createdAt) {
+    if (createdAt == null) return '';
+    final dt = DateTime.tryParse(createdAt)?.toLocal();
+    if (dt == null) return '';
+    final diff = DateTime.now().difference(dt);
+    if (diff.inMinutes < 1) return 'Vừa xong';
+    if (diff.inMinutes < 60) return '${diff.inMinutes} phút trước';
+    if (diff.inHours < 24) return '${diff.inHours} giờ trước';
+    return '${diff.inDays} ngày trước';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      initialChildSize: 0.6,
+      minChildSize: 0.4,
+      maxChildSize: 0.92,
+      builder: (context, scrollController) {
+        return Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          child: Column(
+            children: [
+              // Handle
+              const SizedBox(height: 12),
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.black12,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              // Header
+              Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                child: Row(
+                  children: [
+                    const Text('Thông báo',
+                        style: TextStyle(
+                            fontSize: 18, fontWeight: FontWeight.w700)),
+                    const Spacer(),
+                    TextButton(
+                      onPressed: () {
+                        FirestoreService.instance
+                            .markAllNotificationsRead(uid);
+                      },
+                      child: const Text('Đọc tất cả'),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1),
+              // List
+              Expanded(
+                child: StreamBuilder<List<Map<String, dynamic>>>(
+                  stream: FirestoreService.instance
+                      .getNotificationsStream(uid),
+                  builder: (context, snapshot) {
+                    final items = snapshot.data ?? [];
+                    if (items.isEmpty) {
+                      return const Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(CupertinoIcons.bell_slash,
+                                size: 48, color: Colors.black26),
+                            SizedBox(height: 12),
+                            Text('Chưa có thông báo nào',
+                                style: TextStyle(color: Colors.black45)),
+                          ],
+                        ),
+                      );
+                    }
+                    return ListView.separated(
+                      controller: scrollController,
+                      itemCount: items.length,
+                      separatorBuilder: (_, __) =>
+                          const Divider(height: 1, indent: 68),
+                      itemBuilder: (context, index) {
+                        final item = items[index];
+                        final isRead = item['is_read'] == true;
+                        final type = item['type'] as String? ?? 'general';
+                        final icon =
+                            _typeIcons[type] ?? CupertinoIcons.bell_fill;
+                        final color = _typeColors[type] ?? roomifyNavy;
+                        return InkWell(
+                          onTap: () => FirestoreService.instance
+                              .markNotificationRead(item['id'] as String),
+                          child: Container(
+                            color: isRead
+                                ? Colors.transparent
+                                : const Color(0xFFE3F2FD),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 14),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Container(
+                                  width: 40,
+                                  height: 40,
+                                  decoration: BoxDecoration(
+                                    color: color.withValues(alpha: 0.12),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: Icon(icon,
+                                      size: 18, color: color),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        item['title'] as String? ?? '',
+                                        style: TextStyle(
+                                          fontWeight: isRead
+                                              ? FontWeight.w500
+                                              : FontWeight.w700,
+                                          fontSize: 14,
+                                        ),
+                                      ),
+                                      if (item['body'] != null) ...[
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          item['body'] as String,
+                                          style: const TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.black54),
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ],
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        _timeAgo(
+                                            item['created_at'] as String?),
+                                        style: const TextStyle(
+                                            fontSize: 11,
+                                            color: Colors.black38),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                if (!isRead)
+                                  Container(
+                                    width: 8,
+                                    height: 8,
+                                    margin: const EdgeInsets.only(top: 4),
+                                    decoration: const BoxDecoration(
+                                      color: Color(0xFF1565C0),
+                                      shape: BoxShape.circle,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
@@ -4123,17 +4893,29 @@ class NativeSearchField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return TextField(
-      onChanged: onChanged,
-      decoration: InputDecoration(
-        hintText: hintText,
-        prefixIcon: const Icon(CupertinoIcons.search, color: roomifyMuted),
-        filled: true,
-        fillColor: Colors.white,
-        contentPadding: const EdgeInsets.symmetric(vertical: 18),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(20),
-          borderSide: BorderSide.none,
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.06),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: TextField(
+        onChanged: onChanged,
+        decoration: InputDecoration(
+          hintText: hintText,
+          prefixIcon: const Icon(CupertinoIcons.search, color: roomifyMuted),
+          filled: true,
+          fillColor: Colors.white,
+          contentPadding: const EdgeInsets.symmetric(vertical: 18),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(20),
+            borderSide: BorderSide.none,
+          ),
         ),
       ),
     );
@@ -4264,33 +5046,67 @@ class SectionHeading extends StatelessWidget {
 }
 
 class CategoryCard extends StatelessWidget {
-  const CategoryCard({super.key, required this.label, required this.count});
+  const CategoryCard({
+    super.key,
+    required this.label,
+    required this.count,
+    required this.onTap,
+  });
 
   final String label;
   final int count;
+  final VoidCallback onTap;
+
+  static const _icons = <String, IconData>{
+    'Căn hộ': CupertinoIcons.building_2_fill,
+    'Căn hộ penthouse': CupertinoIcons.sparkles,
+    'Nhà phố': CupertinoIcons.house_fill,
+    'Biệt thự': CupertinoIcons.checkmark_seal_fill,
+  };
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 138,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(22),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          LabelText('$count tin'),
-          const SizedBox(height: 8),
-          Text(
-            label,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.titleMedium,
+    final icon = _icons[label] ?? CupertinoIcons.home;
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(18),
+      clipBehavior: Clip.antiAlias,
+      elevation: 2,
+      shadowColor: Colors.black.withOpacity(0.05),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: SizedBox(
+          width: 130,
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  width: 32,
+                  height: 32,
+                  decoration: BoxDecoration(
+                    color: roomifyNavy.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(9),
+                  ),
+                  child: Icon(icon, size: 16, color: roomifyNavy),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(fontSize: 13),
+                ),
+                const SizedBox(height: 3),
+                Text('$count tin',
+                    style: const TextStyle(fontSize: 11, color: roomifyMuted)),
+              ],
+            ),
           ),
-        ],
+        ),
       ),
     );
   }
@@ -4318,23 +5134,22 @@ class PropertyCard extends StatelessWidget {
     final descriptionSpacing = compact ? 12.0 : 10.0;
     final footerSpacing = compact ? 14.0 : 10.0;
 
-    return Material(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(28),
+    return Card(
+      elevation: 2,
+      shadowColor: Colors.black.withOpacity(0.10),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(24),
+      ),
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
-        borderRadius: BorderRadius.circular(28),
+        borderRadius: BorderRadius.circular(24),
         onTap: onTap,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Stack(
               children: [
-                ClipRRect(
-                  borderRadius: const BorderRadius.vertical(
-                    top: Radius.circular(28),
-                  ),
-                  child: PropertyArt(property: property, height: imageHeight),
-                ),
+                PropertyArt(property: property, height: imageHeight),
                 Positioned(
                   top: 14,
                   right: 14,
@@ -4403,6 +5218,15 @@ class PropertyCard extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
+                      if (property.viewCount > 0) ...[
+                        const Icon(CupertinoIcons.eye, size: 12, color: roomifyMuted),
+                        const SizedBox(width: 3),
+                        Text(
+                          '${property.viewCount}',
+                          style: const TextStyle(fontSize: 11, color: roomifyMuted),
+                        ),
+                        const SizedBox(width: 8),
+                      ],
                       if (!compact)
                         TextButton(
                           onPressed: onTap,
@@ -5466,6 +6290,8 @@ class PropertyItem {
     this.panoramaUrl,
     this.matterportUrl,
     this.ownerId,
+    this.listingId,
+    this.viewCount = 0,
   });
 
   final int id;
@@ -5491,6 +6317,12 @@ class PropertyItem {
 
   /// UID của chủ nhà (chỉ có ở tin đăng từ Firestore).
   final String? ownerId;
+
+  /// UUID gốc từ user_listings (dùng để đếm lượt xem).
+  final String? listingId;
+
+  /// Số lượt xem (chỉ có ở tin đăng từ user_listings).
+  final int viewCount;
 
   String get district => location.split(',').first.trim();
 }

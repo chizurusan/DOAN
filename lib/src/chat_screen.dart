@@ -1,6 +1,5 @@
 import 'dart:math';
 
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
@@ -26,13 +25,14 @@ class ChatMessage {
   final bool isUser;
   final DateTime timestamp;
 
-  factory ChatMessage.fromFirestore(DocumentSnapshot doc) {
-    final data = doc.data() as Map<String, dynamic>;
+  factory ChatMessage.fromMap(Map<String, dynamic> data) {
     return ChatMessage(
-      id: doc.id,
+      id: data['id'] as String? ?? '',
       text: data['text'] as String? ?? '',
-      isUser: data['isUser'] as bool? ?? false,
-      timestamp: (data['timestamp'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      isUser: data['is_user'] as bool? ?? false,
+      timestamp: data['created_at'] != null
+          ? DateTime.parse(data['created_at'] as String)
+          : DateTime.now(),
     );
   }
 }
@@ -350,8 +350,6 @@ class _ChatBotScreenState extends State<ChatBotScreen> {
   final ScrollController _scrollController = ScrollController();
   final List<ChatMessage> _localMessages = [];
   bool _isBotTyping = false;
-  bool _firestoreReady = false;
-
   String get _sessionId {
     final uid = AuthService.instance.currentUser?.uid;
     return uid ?? 'guest_${DateTime.now().millisecondsSinceEpoch}';
@@ -360,14 +358,7 @@ class _ChatBotScreenState extends State<ChatBotScreen> {
   @override
   void initState() {
     super.initState();
-    _checkFirestore();
     _addWelcomeMessage();
-  }
-
-  void _checkFirestore() {
-    setState(() {
-      _firestoreReady = FirestoreService.instance.isReady;
-    });
   }
 
   void _addWelcomeMessage() {
@@ -541,9 +532,7 @@ class _ChatBotScreenState extends State<ChatBotScreen> {
                             ),
                           ),
                           Text(
-                            _firestoreReady
-                                ? 'Online · Kết nối Firebase'
-                                : 'Demo mode',
+                            'Online · Kết nối Supabase',
                             style: const TextStyle(
                               fontSize: 11,
                               color: Colors.white70,
